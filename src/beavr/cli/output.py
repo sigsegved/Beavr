@@ -239,7 +239,7 @@ def print_run_list(runs: list[dict], console: Console) -> None:
     table.add_column("Created", style="dim")
     
     for run in runs:
-        run_id = run.get("run_id", "")[:8] + "..."
+        run_id = run.get("id", run.get("run_id", ""))[:8] + "..."
         strategy = run.get("strategy_name", "N/A")
         symbols = run.get("symbols", "N/A")
         
@@ -254,10 +254,13 @@ def print_run_list(runs: list[dict], console: Console) -> None:
             return_str = "N/A"
         
         created = run.get("created_at", "N/A")
-        if created and len(created) > 10:
-            created = created[:10]
+        if created:
+            if hasattr(created, "strftime"):
+                created = created.strftime("%Y-%m-%d")
+            elif isinstance(created, str) and len(created) > 10:
+                created = created[:10]
         
-        table.add_row(run_id, strategy, symbols, period, return_str, created)
+        table.add_row(run_id, strategy, symbols, period, return_str, str(created))
     
     console.print(table)
 
@@ -273,12 +276,16 @@ def print_run_detail(run: dict, console: Console) -> None:
     info_table.add_column("Label", style="dim")
     info_table.add_column("Value")
     
-    info_table.add_row("Run ID:", run.get("run_id", "N/A"))
-    info_table.add_row("Strategy:", run.get("strategy_name", "N/A"))
-    info_table.add_row("Symbols:", run.get("symbols", "N/A"))
+    info_table.add_row("Run ID:", str(run.get("id", run.get("run_id", "N/A"))))
+    info_table.add_row("Strategy:", str(run.get("strategy_name", "N/A")))
+    info_table.add_row("Symbols:", str(run.get("symbols", "N/A")))
     info_table.add_row("Period:", f"{run.get('start_date', '')} to {run.get('end_date', '')}")
     info_table.add_row("Initial Cash:", _format_money(Decimal(str(run.get("initial_cash", 0)))))
-    info_table.add_row("Created:", run.get("created_at", "N/A"))
+    
+    created = run.get("created_at", "N/A")
+    if hasattr(created, "strftime"):
+        created = created.strftime("%Y-%m-%d %H:%M:%S")
+    info_table.add_row("Created:", str(created))
     
     console.print(info_table)
     console.print()

@@ -56,25 +56,30 @@ class BacktestResultsRepository:
     def create_run(
         self,
         strategy_name: str,
-        config: dict,
         start_date: date,
         end_date: date,
         initial_cash: Decimal,
+        config: Optional[dict] = None,
+        run_id: Optional[str] = None,
     ) -> str:
         """
         Create a new backtest run.
 
         Args:
             strategy_name: Name of the strategy being tested
-            config: Strategy configuration as dict
             start_date: Backtest start date
             end_date: Backtest end date
             initial_cash: Starting cash amount
+            config: Strategy configuration as dict (optional)
+            run_id: Optional run ID to use (generated if not provided)
 
         Returns:
             Run ID (UUID string)
         """
-        run_id = str(uuid.uuid4())
+        if run_id is None:
+            run_id = str(uuid.uuid4())
+
+        config_json = json.dumps(config) if config else "{}"
 
         with self.db.connect() as conn:
             conn.execute(
@@ -85,7 +90,7 @@ class BacktestResultsRepository:
                 (
                     run_id,
                     strategy_name,
-                    json.dumps(config),
+                    config_json,
                     start_date.isoformat(),
                     end_date.isoformat(),
                     float(initial_cash),
