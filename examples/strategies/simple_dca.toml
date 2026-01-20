@@ -1,0 +1,10 @@
+# Simple DCA Strategy Configuration
+# Dollar-cost average into SPY on the 1st of each month
+
+template = "simple_dca"
+
+[params]
+symbols = ["SPY"]
+amount = 500       # Buy $500 worth each time
+frequency = "monthly"
+day_of_month = 1   # Buy on the 1st of each month

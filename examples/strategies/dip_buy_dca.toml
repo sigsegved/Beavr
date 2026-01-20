@@ -1,0 +1,12 @@
+# Dip Buy DCA Strategy Configuration
+# Buy on dips with month-end fallback
+
+template = "dip_buy_dca"
+
+[params]
+symbols = ["SPY", "QQQ"]
+monthly_budget = 500      # Total budget per month
+dip_threshold = 0.02      # Buy when price drops 2% from recent high
+dip_buy_pct = 0.50        # Deploy 50% of remaining budget on each dip
+lookback_days = 5         # Look back 5 days for recent high
+fallback_days = 3         # Deploy remaining budget in last 3 days of month
