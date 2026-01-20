@@ -79,6 +79,7 @@ def run_backtest(
         "table", "--output", "-o", help="Output format: table, json, csv"
     ),
     save: bool = typer.Option(True, "--save/--no-save", help="Save results to database"),
+    hourly: bool = typer.Option(False, "--hourly", help="Use hourly data for dip detection"),
 ) -> None:
     """Run a backtest for a strategy."""
     from beavr.backtest.engine import BacktestEngine
@@ -114,6 +115,10 @@ def run_backtest(
     
     # Ensure symbols are in strategy params
     strategy_params["symbols"] = symbol_list
+    
+    # Add hourly data option if enabled
+    if hourly:
+        strategy_params["use_hourly_data"] = True
     
     # Verify strategy exists
     try:

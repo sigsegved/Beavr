@@ -161,6 +161,16 @@ class DipBuyDCAParams(BaseModel):
         description="Minimum order size in dollars",
         ge=Decimal("1"),
     )
+    use_hourly_data: bool = Field(
+        default=False,
+        description="Use hourly data for better dip detection",
+    )
+    lookback_hours: int = Field(
+        default=24,
+        description="Hours to look back for recent high (when using hourly data)",
+        ge=6,
+        le=168,
+    )
 
     model_config = ConfigDict(frozen=True)
 

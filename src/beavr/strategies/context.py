@@ -1,8 +1,11 @@
 """Strategy context for evaluation."""
 
-from dataclasses import dataclass
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal
+from typing import Optional
 
 import pandas as pd
 
@@ -18,6 +21,7 @@ class StrategyContext:
         current_date: The date being evaluated
         prices: Current closing prices by symbol
         bars: Historical bar data up to current_date by symbol
+        hourly_bars: Optional hourly bar data for intraday analysis
         cash: Available cash in portfolio
         positions: Current share holdings by symbol
         period_budget: Budget allocated for the current period (month)
@@ -50,6 +54,9 @@ class StrategyContext:
     days_to_month_end: int
     is_first_trading_day_of_month: bool
     is_last_trading_day_of_month: bool
+    
+    # Optional hourly data (must be last due to default value)
+    hourly_bars: Optional[dict[str, pd.DataFrame]] = field(default=None)  # symbol -> hourly bars
 
     @property
     def remaining_budget(self) -> Decimal:

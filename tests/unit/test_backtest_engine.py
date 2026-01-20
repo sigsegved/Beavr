@@ -26,6 +26,7 @@ class MockDataFetcher:
         symbols: list[str],
         start: date,
         end: date,
+        timeframe: str = "1Day",
     ) -> dict[str, pd.DataFrame]:
         """Return pre-configured bar data."""
         return {s: self.bars.get(s, pd.DataFrame()) for s in symbols}

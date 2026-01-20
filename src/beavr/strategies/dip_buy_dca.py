@@ -85,9 +85,14 @@ class DipBuyDCAStrategy(BaseStrategy):
 
             price = ctx.prices[symbol]
             bars = ctx.bars[symbol]
+            
+            # Use hourly bars for dip detection if available and enabled
+            hourly = None
+            if self.params.use_hourly_data and ctx.hourly_bars:
+                hourly = ctx.hourly_bars.get(symbol)
 
-            # Check for dip
-            if self._is_dip(price, bars):
+            # Check for dip (using hourly data if available)
+            if self._is_dip(price, bars, hourly):
                 # Buy a portion of remaining budget
                 amount = budget_left * Decimal(str(self.params.dip_buy_pct))
                 if amount >= self.params.min_buy_amount:
@@ -128,7 +133,12 @@ class DipBuyDCAStrategy(BaseStrategy):
 
         return signals
 
-    def _is_dip(self, current_price: Decimal, bars: pd.DataFrame) -> bool:
+    def _is_dip(
+        self,
+        current_price: Decimal,
+        bars: pd.DataFrame,
+        hourly_bars: Optional[pd.DataFrame] = None,
+    ) -> bool:
         """Check if current price represents a dip.
 
         A dip is defined as the current price being at least dip_threshold
@@ -136,36 +146,61 @@ class DipBuyDCAStrategy(BaseStrategy):
 
         Args:
             current_price: Current price
-            bars: Historical bar data
+            bars: Historical daily bar data
+            hourly_bars: Optional hourly bar data for finer granularity
 
         Returns:
             True if price is a dip
         """
-        recent_high = self._get_recent_high(bars)
+        recent_high = self._get_recent_high(bars, hourly_bars)
         if recent_high is None or recent_high == Decimal("0"):
             return False
 
         drop_pct = float((recent_high - current_price) / recent_high)
         return drop_pct >= self.params.dip_threshold
 
-    def _get_recent_high(self, bars: pd.DataFrame) -> Optional[Decimal]:
-        """Get highest close in lookback period.
+    def _get_recent_high(
+        self,
+        bars: pd.DataFrame,
+        hourly_bars: Optional[pd.DataFrame] = None,
+    ) -> Optional[Decimal]:
+        """Get highest close/high in lookback period.
+
+        Uses hourly data if available for more precise high detection.
 
         Args:
-            bars: Historical bar data
+            bars: Historical daily bar data
+            hourly_bars: Optional hourly bar data
 
         Returns:
-            Highest close price in lookback period, or None if no data
+            Highest price in lookback period, or None if no data
         """
+        # Use hourly data if available and enabled
+        if hourly_bars is not None and not hourly_bars.empty:
+            # Use lookback_hours parameter
+            recent = hourly_bars.tail(self.params.lookback_hours)
+            if "high" in recent.columns:
+                max_high = recent["high"].max()
+                return Decimal(str(max_high))
+            elif "close" in recent.columns:
+                max_close = recent["close"].max()
+                return Decimal(str(max_close))
+
+        # Fall back to daily data
         if bars.empty or len(bars) < 1:
             return None
 
         recent = bars.tail(self.params.lookback_days)
-        if "close" not in recent.columns:
+        
+        # Use high column if available, else close
+        if "high" in recent.columns:
+            max_price = recent["high"].max()
+        elif "close" in recent.columns:
+            max_price = recent["close"].max()
+        else:
             return None
-
-        max_close = recent["close"].max()
-        return Decimal(str(max_close))
+            
+        return Decimal(str(max_price))
 
     def _should_fallback(self, ctx: StrategyContext) -> bool:
         """Check if we should trigger fallback buy.

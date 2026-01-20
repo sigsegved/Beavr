@@ -118,12 +118,28 @@ class BacktestEngine:
         # Create run record
         run_id = str(uuid4())
 
-        # Fetch data for all symbols
+        # Check if strategy wants hourly data
+        use_hourly = False
+        if hasattr(strategy, "params") and hasattr(strategy.params, "use_hourly_data"):
+            use_hourly = strategy.params.use_hourly_data
+
+        # Fetch daily data for all symbols
         bars = self.data.get_multi_bars(
             symbols=strategy.symbols,
             start=start_date,
             end=end_date,
+            timeframe="1Day",
         )
+
+        # Fetch hourly data if strategy requests it (for better dip detection)
+        hourly_bars: dict[str, pd.DataFrame] = {}
+        if use_hourly:
+            hourly_bars = self.data.get_multi_bars(
+                symbols=strategy.symbols,
+                start=start_date,
+                end=end_date,
+                timeframe="1Hour",
+            )
 
         # Get trading days (days with data)
         trading_days = self._get_trading_days(bars, start_date, end_date)
@@ -138,6 +154,7 @@ class BacktestEngine:
         current_month: Optional[int] = None
         period_budget = initial_cash  # Default to full cash as budget
         period_spent = Decimal("0")
+
 
         # If strategy has monthly budget in params, use that
         if hasattr(strategy, "params") and hasattr(strategy.params, "monthly_budget"):
@@ -160,6 +177,7 @@ class BacktestEngine:
                     period_spent=period_spent,
                     trading_days=trading_days,
                     current_index=i,
+                    hourly_bars=hourly_bars if use_hourly else None,
                 )
                 strategy.on_period_start(ctx)
 
@@ -172,6 +190,7 @@ class BacktestEngine:
                 period_spent=period_spent,
                 trading_days=trading_days,
                 current_index=i,
+                hourly_bars=hourly_bars if use_hourly else None,
             )
 
             # Get signals from strategy
@@ -273,6 +292,7 @@ class BacktestEngine:
         period_spent: Decimal,
         trading_days: list[date],
         current_index: int,
+        hourly_bars: dict[str, pd.DataFrame] | None = None,
     ) -> StrategyContext:
         """Build strategy context for a given day.
 
@@ -284,6 +304,7 @@ class BacktestEngine:
             period_spent: Amount spent this period
             trading_days: List of all trading days
             current_index: Current index in trading_days
+            hourly_bars: Optional hourly bar data for intraday analysis
 
         Returns:
             StrategyContext with all relevant information
@@ -318,10 +339,25 @@ class BacktestEngine:
         # Calculate calendar helpers
         days_to_month_end = self._days_to_month_end(trading_days, current_index)
 
+        # Process hourly bars if provided
+        filtered_hourly: dict[str, pd.DataFrame] | None = None
+        if hourly_bars:
+            filtered_hourly = {}
+            for symbol, df in hourly_bars.items():
+                if df.empty:
+                    continue
+                # Filter hourly bars up to end of current day
+                if "timestamp" in df.columns:
+                    mask = df["timestamp"].dt.date <= day
+                else:
+                    mask = df.index.date <= day
+                filtered_hourly[symbol] = df[mask]
+
         return StrategyContext(
             current_date=day,
             prices=prices,
             bars=historical_bars,
+            hourly_bars=filtered_hourly,
             cash=portfolio.cash,
             positions=positions,
             period_budget=period_budget,
