@@ -4,8 +4,9 @@ from datetime import datetime
 from decimal import Decimal
 
 import pytest
+from pydantic import ValidationError
 
-from beavr.models import Bar, Position, PortfolioState, Signal, Trade
+from beavr.models import Bar, PortfolioState, Position, Signal, Trade
 
 
 class TestBar:
@@ -37,7 +38,7 @@ class TestBar:
             close=Decimal("453.50"),
             volume=1000000,
         )
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             bar.close = Decimal("460.00")  # type: ignore
 
     def test_bar_with_timeframe(self) -> None:

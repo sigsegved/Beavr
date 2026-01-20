@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class Bar(BaseModel):
     """
     OHLCV bar data representing a single candlestick.
-    
+
     Attributes:
         symbol: Trading symbol (e.g., "SPY", "AAPL")
         timestamp: Bar timestamp (start of the period)
@@ -21,7 +21,7 @@ class Bar(BaseModel):
         volume: Trading volume
         timeframe: Timeframe string (e.g., "1Day", "1Hour")
     """
-    
+
     symbol: str = Field(..., description="Trading symbol")
     timestamp: datetime = Field(..., description="Bar timestamp")
     open: Decimal = Field(..., description="Opening price", ge=0)
@@ -30,9 +30,9 @@ class Bar(BaseModel):
     close: Decimal = Field(..., description="Closing price", ge=0)
     volume: int = Field(..., description="Trading volume", ge=0)
     timeframe: Optional[str] = Field(default="1Day", description="Bar timeframe")
-    
+
     model_config = ConfigDict(frozen=True)
-    
+
     def __str__(self) -> str:
         return (
             f"Bar({self.symbol} {self.timestamp.date()} "

@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 class Trade(BaseModel):
     """
     Record of an executed (or simulated) trade.
-    
+
     Attributes:
         id: Unique trade identifier (UUID)
         symbol: Trading symbol
@@ -23,7 +23,7 @@ class Trade(BaseModel):
         reason: Reason for the trade (e.g., "dip_buy", "scheduled", "fallback")
         strategy_id: Optional strategy identifier
     """
-    
+
     id: str = Field(default_factory=lambda: str(uuid4()), description="Unique trade ID")
     symbol: str = Field(..., description="Trading symbol")
     side: Literal["buy", "sell"] = Field(..., description="Trade side")
@@ -33,13 +33,13 @@ class Trade(BaseModel):
     timestamp: datetime = Field(..., description="Trade timestamp")
     reason: str = Field(..., description="Trade reason")
     strategy_id: Optional[str] = Field(default=None, description="Strategy identifier")
-    
+
     def __str__(self) -> str:
         return (
             f"Trade({self.side.upper()} {self.quantity} {self.symbol} "
             f"@ ${self.price} = ${self.amount} [{self.reason}])"
         )
-    
+
     @classmethod
     def create_buy(
         cls,
@@ -52,7 +52,7 @@ class Trade(BaseModel):
     ) -> "Trade":
         """
         Factory method to create a buy trade from a dollar amount.
-        
+
         Calculates quantity based on amount and price.
         """
         quantity = amount / price
@@ -66,7 +66,7 @@ class Trade(BaseModel):
             reason=reason,
             strategy_id=strategy_id,
         )
-    
+
     @classmethod
     def create_sell(
         cls,
@@ -79,7 +79,7 @@ class Trade(BaseModel):
     ) -> "Trade":
         """
         Factory method to create a sell trade from a share quantity.
-        
+
         Calculates amount based on quantity and price.
         """
         amount = quantity * price
