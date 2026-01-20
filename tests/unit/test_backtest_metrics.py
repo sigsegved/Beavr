@@ -343,6 +343,8 @@ class TestCalculateMetrics:
             max_drawdown=0.15,
             sharpe_ratio=1.5,
             total_trades=10,
+            buy_trades=8,
+            sell_trades=2,
             total_invested=Decimal("5000"),
             holdings={"SPY": Decimal("20")},
         )
@@ -352,3 +354,5 @@ class TestCalculateMetrics:
         assert metrics.cagr == 0.10
         assert metrics.max_drawdown == 0.15
         assert metrics.sharpe_ratio == 1.5
+        assert metrics.buy_trades == 8
+        assert metrics.sell_trades == 2

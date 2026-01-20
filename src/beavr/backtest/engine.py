@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
@@ -14,9 +14,21 @@ from beavr.backtest.metrics import BacktestMetrics, calculate_metrics
 from beavr.backtest.portfolio import SimulatedPortfolio
 from beavr.data.alpaca import AlpacaDataFetcher
 from beavr.db.results import BacktestResultsRepository
+from beavr.models.portfolio import Position
 from beavr.models.trade import Trade
 from beavr.strategies.base import BaseStrategy
 from beavr.strategies.context import StrategyContext
+
+
+@dataclass
+class BacktestConfig:
+    """Configuration used for a backtest run."""
+
+    strategy_name: str
+    symbols: list[str]
+    start_date: date
+    end_date: date
+    initial_cash: Decimal
 
 
 @dataclass
@@ -25,21 +37,38 @@ class BacktestResult:
 
     Attributes:
         run_id: Unique identifier for this run
-        strategy_name: Name of the strategy used
-        start_date: Backtest start date
-        end_date: Backtest end date
+        config: Backtest configuration
         metrics: Performance metrics
         trades: List of executed trades
         daily_values: Daily portfolio values for charting
+        final_value: Final portfolio value
+        final_cash: Final cash balance
+        final_positions: Final holdings
+        final_prices: Final prices used for valuation
     """
 
     run_id: str
-    strategy_name: str
-    start_date: date
-    end_date: date
+    config: BacktestConfig
     metrics: BacktestMetrics
     trades: list[Trade]
     daily_values: list[tuple[date, Decimal]]
+    final_value: Decimal
+    final_cash: Decimal
+    final_positions: dict[str, Position] = field(default_factory=dict)
+    final_prices: dict[str, Decimal] = field(default_factory=dict)
+
+    # Legacy accessors for backwards compatibility
+    @property
+    def strategy_name(self) -> str:
+        return self.config.strategy_name
+
+    @property
+    def start_date(self) -> date:
+        return self.config.start_date
+
+    @property
+    def end_date(self) -> date:
+        return self.config.end_date
 
 
 class BacktestEngine:
@@ -205,14 +234,34 @@ class BacktestEngine:
             self.results_repo.save_results(run_id, metrics)
             self.results_repo.save_trades(run_id, portfolio.trades)
 
-        return BacktestResult(
-            run_id=run_id,
+        # Build final positions
+        final_positions: dict[str, Position] = {}
+        for symbol, qty in portfolio.positions.items():
+            avg_cost = portfolio.get_avg_cost(symbol)
+            final_positions[symbol] = Position(
+                symbol=symbol,
+                quantity=qty,
+                avg_cost=avg_cost,
+            )
+
+        config = BacktestConfig(
             strategy_name=strategy.name,
+            symbols=strategy.symbols,
             start_date=start_date,
             end_date=end_date,
+            initial_cash=initial_cash,
+        )
+
+        return BacktestResult(
+            run_id=run_id,
+            config=config,
             metrics=metrics,
             trades=portfolio.trades,
             daily_values=daily_values,
+            final_value=final_value,
+            final_cash=portfolio.cash,
+            final_positions=final_positions,
+            final_prices=final_prices,
         )
 
     def _build_context(
@@ -248,7 +297,10 @@ class BacktestEngine:
                 continue
 
             # Filter to dates up to and including current day
-            mask = df.index.date <= day
+            if "timestamp" in df.columns:
+                mask = df["timestamp"].dt.date <= day
+            else:
+                mask = df.index.date <= day
             historical = df[mask]
 
             if not historical.empty:
@@ -308,11 +360,18 @@ class BacktestEngine:
         for df in bars.values():
             if df.empty:
                 continue
-            # Extract dates from index
-            for idx in df.index:
-                d = idx.date() if hasattr(idx, "date") else idx
-                if start <= d <= end:
-                    all_dates.add(d)
+            # Extract dates from timestamp column
+            if "timestamp" in df.columns:
+                for ts in df["timestamp"]:
+                    d = ts.date() if hasattr(ts, "date") else ts
+                    if start <= d <= end:
+                        all_dates.add(d)
+            else:
+                # Fallback to index if no timestamp column
+                for idx in df.index:
+                    d = idx.date() if hasattr(idx, "date") else idx
+                    if start <= d <= end:
+                        all_dates.add(d)
 
         return sorted(all_dates)
 
@@ -336,9 +395,14 @@ class BacktestEngine:
             if df.empty:
                 continue
 
-            # Find the row for this day
-            mask = df.index.date == day
-            day_data = df[mask]
+            # Find the row for this day using timestamp column
+            if "timestamp" in df.columns:
+                mask = df["timestamp"].dt.date == day
+                day_data = df[mask]
+            else:
+                # Fallback to index if no timestamp column
+                mask = df.index.date == day
+                day_data = df[mask]
 
             if not day_data.empty:
                 prices[symbol] = Decimal(str(day_data.iloc[0]["close"]))

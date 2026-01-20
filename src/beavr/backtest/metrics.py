@@ -22,6 +22,8 @@ class BacktestMetrics:
         max_drawdown: Maximum drawdown from peak
         sharpe_ratio: Risk-adjusted return metric
         total_trades: Number of trades executed
+        buy_trades: Number of buy trades
+        sell_trades: Number of sell trades
         total_invested: Total dollar amount invested
         holdings: Final position quantities by symbol
         win_rate: Percentage of profitable trades (for sell trades)
@@ -35,6 +37,8 @@ class BacktestMetrics:
     max_drawdown: Optional[float]
     sharpe_ratio: Optional[float]
     total_trades: int
+    buy_trades: int
+    sell_trades: int
     total_invested: Decimal
     holdings: dict[str, Decimal]
     win_rate: Optional[float] = None
@@ -240,6 +244,7 @@ def calculate_metrics(
         max_drawdown=calculate_max_drawdown(daily_values),
         sharpe_ratio=calculate_sharpe_ratio(daily_values, risk_free_rate),
         total_trades=len(trades),
-        total_invested=total_invested,
+        buy_trades=sum(1 for t in trades if t.side == "buy"),
+        sell_trades=sum(1 for t in trades if t.side == "sell"),        total_invested=total_invested,
         holdings=holdings,
     )

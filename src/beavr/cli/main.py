@@ -4,12 +4,14 @@ import typer
 from rich.console import Console
 
 from beavr import __version__
+from beavr.cli.backtest import backtest_app
 
 app = typer.Typer(
     name="bvr",
     help="Beavr - Auto Trading Platform for retail investors",
     add_completion=False,
 )
+app.add_typer(backtest_app, name="backtest")
 console = Console()
 
 
