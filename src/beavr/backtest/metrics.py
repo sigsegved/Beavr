@@ -236,6 +236,10 @@ def calculate_metrics(
     # Remove zero positions
     holdings = {k: v for k, v in holdings.items() if v > Decimal("0")}
 
+    # Count buy and sell trades
+    buy_trades = sum(1 for t in trades if t.side == "buy")
+    sell_trades = sum(1 for t in trades if t.side == "sell")
+
     return BacktestMetrics(
         initial_cash=initial_cash,
         final_value=final_value,
@@ -244,7 +248,8 @@ def calculate_metrics(
         max_drawdown=calculate_max_drawdown(daily_values),
         sharpe_ratio=calculate_sharpe_ratio(daily_values, risk_free_rate),
         total_trades=len(trades),
-        buy_trades=sum(1 for t in trades if t.side == "buy"),
-        sell_trades=sum(1 for t in trades if t.side == "sell"),        total_invested=total_invested,
+        buy_trades=buy_trades,
+        sell_trades=sell_trades,
+        total_invested=total_invested,
         holdings=holdings,
     )

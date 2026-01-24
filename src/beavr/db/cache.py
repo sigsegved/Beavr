@@ -159,9 +159,8 @@ class BarCache:
         """
         Check if we have complete data for date range.
 
-        Checks if we have at least one bar within the date range.
-        For more sophisticated completeness checking, compare with
-        expected trading days.
+        Checks if we have data covering from start to end dates.
+        Returns False if the cached data doesn't cover the full range.
 
         Args:
             symbol: Stock symbol (e.g., "SPY")
@@ -170,21 +169,29 @@ class BarCache:
             timeframe: Bar timeframe (default "1Day")
 
         Returns:
-            True if data exists for the range, False otherwise
+            True if data exists for the full range, False otherwise
         """
         with self.db.connect() as conn:
-            # Check if we have data for start and end dates
+            # Get the min and max dates we have cached for this symbol
             cursor = conn.execute(
                 """
-                SELECT COUNT(*) as count
+                SELECT MIN(date(timestamp)) as min_date, MAX(date(timestamp)) as max_date
                 FROM bars
                 WHERE symbol = ? AND timeframe = ?
-                    AND date(timestamp) >= ? AND date(timestamp) <= ?
                 """,
-                (symbol, timeframe, start.isoformat(), end.isoformat()),
+                (symbol, timeframe),
             )
             result = cursor.fetchone()
-            return result["count"] > 0 if result else False
+            
+            if not result or not result["min_date"] or not result["max_date"]:
+                return False
+            
+            # Parse the cached date range
+            cached_start = date.fromisoformat(result["min_date"])
+            cached_end = date.fromisoformat(result["max_date"])
+            
+            # Check if our cached range covers the requested range
+            return cached_start <= start and cached_end >= end
 
     def get_date_range(
         self,

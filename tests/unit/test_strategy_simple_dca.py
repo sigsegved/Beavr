@@ -71,17 +71,18 @@ class TestSimpleDCAStrategy:
     def test_monthly_buy_on_correct_day(
         self, sample_bars: dict[str, pd.DataFrame]
     ) -> None:
-        """Test monthly strategy buys on configured day."""
+        """Test monthly strategy buys on first trading day of month."""
         params = SimpleDCAParams(
             symbols=["SPY"],
             amount=Decimal("500"),
             frequency="monthly",
-            day_of_month=15,
+            day_of_month=1,  # This is now ignored - we use is_first_trading_day_of_month
         )
         strategy = SimpleDCAStrategy(params)
 
-        # January 15th is a Monday in 2024
-        ctx = self.create_context(sample_bars, date(2024, 1, 15))
+        # First trading day of the month
+        ctx = self.create_context(sample_bars, date(2024, 1, 2))
+        ctx.is_first_trading_day_of_month = True
         signals = strategy.evaluate(ctx)
 
         assert len(signals) == 1
@@ -93,17 +94,18 @@ class TestSimpleDCAStrategy:
     def test_monthly_no_buy_on_wrong_day(
         self, sample_bars: dict[str, pd.DataFrame]
     ) -> None:
-        """Test monthly strategy doesn't buy on non-scheduled days."""
+        """Test monthly strategy doesn't buy on non-first trading day."""
         params = SimpleDCAParams(
             symbols=["SPY"],
             amount=Decimal("500"),
             frequency="monthly",
-            day_of_month=15,
+            day_of_month=15,  # This is now ignored
         )
         strategy = SimpleDCAStrategy(params)
 
-        # January 10th
+        # January 10th - not first trading day
         ctx = self.create_context(sample_bars, date(2024, 1, 10))
+        ctx.is_first_trading_day_of_month = False
         signals = strategy.evaluate(ctx)
 
         assert len(signals) == 0
@@ -237,15 +239,16 @@ class TestSimpleDCAStrategy:
             symbols=["SPY"],
             amount=Decimal("500"),
             frequency="monthly",
-            day_of_month=15,
+            day_of_month=1,
         )
         strategy = SimpleDCAStrategy(params)
 
-        ctx = self.create_context(sample_bars, date(2024, 1, 15))
+        ctx = self.create_context(sample_bars, date(2024, 1, 2))
+        ctx.is_first_trading_day_of_month = True
         signals = strategy.evaluate(ctx)
 
         assert len(signals) == 1
-        assert signals[0].timestamp.date() == date(2024, 1, 15)
+        assert signals[0].timestamp.date() == date(2024, 1, 2)
 
     def test_default_params(self) -> None:
         """Test strategy works with default parameters."""

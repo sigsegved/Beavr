@@ -153,7 +153,7 @@ class TestBarCacheGet:
         assert result is None
 
     def test_get_bars_partial_range(self, cache):
-        """Test getting bars when only partial data exists."""
+        """Test that get_bars returns None when only partial data exists."""
         bars = make_bars_df(
             dates=["2024-01-16"],  # Only middle date
             prices=[452.0],
@@ -162,10 +162,14 @@ class TestBarCacheGet:
         cache.save_bars("SPY", bars)
 
         # Request range that includes more than we have
-        # has_data will return True since we have SOME data
+        # has_data will return False since we don't have full coverage
         result = cache.get_bars("SPY", date(2024, 1, 15), date(2024, 1, 17))
 
-        # Actually we just have 1 bar within the range
+        # Should return None because we don't have full range coverage
+        assert result is None
+        
+        # But if we request just what we have, it should work
+        result = cache.get_bars("SPY", date(2024, 1, 16), date(2024, 1, 16))
         assert result is not None
         assert len(result) == 1
 
@@ -217,7 +221,7 @@ class TestBarCacheHasData:
         assert cache.has_data("SPY", date(2024, 1, 15), date(2024, 1, 16)) is False
 
     def test_has_data_partial(self, cache):
-        """Test has_data returns True even with partial data."""
+        """Test has_data returns False when only partial data exists."""
         bars = make_bars_df(
             dates=["2024-01-16"],  # Only middle date
             prices=[452.0],
@@ -225,8 +229,10 @@ class TestBarCacheHasData:
         )
         cache.save_bars("SPY", bars)
 
-        # Has SOME data in the range
-        assert cache.has_data("SPY", date(2024, 1, 15), date(2024, 1, 17)) is True
+        # Does NOT have full coverage - should return False
+        assert cache.has_data("SPY", date(2024, 1, 15), date(2024, 1, 17)) is False
+        # But does have coverage for just the date we have
+        assert cache.has_data("SPY", date(2024, 1, 16), date(2024, 1, 16)) is True
 
     def test_has_data_outside_range(self, cache):
         """Test has_data returns False when data outside range."""

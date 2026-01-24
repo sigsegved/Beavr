@@ -98,15 +98,9 @@ class SimpleDCAStrategy(BaseStrategy):
             True if today matches the configured buy schedule
         """
         if self.params.frequency == "monthly":
-            # For monthly, check if day of month matches
-            # Handle case where target day doesn't exist (e.g., 31st in February)
-            # In that case, buy on the last trading day of month
-            if ctx.day_of_month == self.params.day_of_month:
-                return True
-            # If we're past the target day and it hasn't occurred yet this month
-            # (e.g., target is 31st but month only has 30 days)
-            # Buy on last trading day
-            if ctx.is_last_trading_day_of_month and ctx.day_of_month < self.params.day_of_month:
+            # For monthly, buy on the first trading day of the month
+            # or on the configured day_of_month if it falls on a trading day
+            if ctx.is_first_trading_day_of_month:
                 return True
             return False
 
