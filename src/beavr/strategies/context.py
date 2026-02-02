@@ -54,7 +54,7 @@ class StrategyContext:
     days_to_month_end: int
     is_first_trading_day_of_month: bool
     is_last_trading_day_of_month: bool
-    
+
     # Optional hourly data (must be last due to default value)
     hourly_bars: Optional[dict[str, pd.DataFrame]] = field(default=None)  # symbol -> hourly bars
 

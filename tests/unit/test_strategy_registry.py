@@ -1,9 +1,7 @@
 """Tests for strategy registry."""
 
-from datetime import date, datetime
 from decimal import Decimal
 
-import pandas as pd
 import pytest
 from pydantic import BaseModel, Field
 

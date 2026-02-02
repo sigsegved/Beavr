@@ -83,13 +83,13 @@ class DipBuyDCAStrategy(BaseStrategy):
             List of buy signals based on DCA, dip detection, or fallback logic
         """
         signals = []
-        
+
         # Reset tracking at start of new month
         if ctx.current_date.month != self._current_month:
             self._current_month = ctx.current_date.month
             self._dip_buy_count = 0
             self._last_buy_price = {}
-        
+
         remaining_budget = ctx.period_budget - ctx.period_spent
 
         if remaining_budget <= Decimal("0"):
@@ -126,14 +126,14 @@ class DipBuyDCAStrategy(BaseStrategy):
 
             # 2. Check for dip from last buy price (using hourly data if available)
             hourly = ctx.hourly_bars.get(symbol) if ctx.hourly_bars else None
-            
+
             if (
                 symbol in self._last_buy_price
                 and self._dip_buy_count < self.params.max_dip_buys
             ):
                 # Get proportional buy amount based on dip depth
                 dip_pct, buy_fraction = self._get_proportional_buy(price, symbol, hourly)
-                
+
                 if buy_fraction > 0:
                     amount = budget_left * Decimal(str(buy_fraction))
                     if amount >= self.params.min_buy_amount:
@@ -144,7 +144,7 @@ class DipBuyDCAStrategy(BaseStrategy):
                             reason = "dip_buy_t2"
                         else:
                             reason = "dip_buy_t1"
-                        
+
                         signals.append(
                             Signal(
                                 symbol=symbol,
@@ -210,7 +210,7 @@ class DipBuyDCAStrategy(BaseStrategy):
 
         # Calculate dip percentage from current/close price
         dip_pct = float((last_price - current_price) / last_price)
-        
+
         # With hourly data, check if any intraday low hit a deeper tier
         if hourly_bars is not None and not hourly_bars.empty and "low" in hourly_bars.columns:
             recent_hours = hourly_bars.tail(self.params.lookback_hours)
@@ -327,7 +327,7 @@ class DipBuyDCAStrategy(BaseStrategy):
             return None
 
         recent = bars.tail(self.params.lookback_days)
-        
+
         # Use high column if available, else close
         if "high" in recent.columns:
             max_price = recent["high"].max()
@@ -335,7 +335,7 @@ class DipBuyDCAStrategy(BaseStrategy):
             max_price = recent["close"].max()
         else:
             return None
-            
+
         return Decimal(str(max_price))
 
     def _should_fallback(self, ctx: StrategyContext) -> bool:

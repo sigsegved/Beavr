@@ -182,14 +182,14 @@ class BarCache:
                 (symbol, timeframe),
             )
             result = cursor.fetchone()
-            
+
             if not result or not result["min_date"] or not result["max_date"]:
                 return False
-            
+
             # Parse the cached date range
             cached_start = date.fromisoformat(result["min_date"])
             cached_end = date.fromisoformat(result["max_date"])
-            
+
             # Check if our cached range covers the requested range
             return cached_start <= start and cached_end >= end
 

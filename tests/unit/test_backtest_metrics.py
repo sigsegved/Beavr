@@ -201,7 +201,7 @@ class TestSharpeRatio:
         values = [Decimal(str(100 + i * 0.1)) for i in range(252)]
         result_no_rf = calculate_sharpe_ratio(values, risk_free_rate=0.0)
         result_with_rf = calculate_sharpe_ratio(values, risk_free_rate=0.05)
-        
+
         # Higher risk-free rate should reduce Sharpe
         assert result_no_rf is not None
         assert result_with_rf is not None
@@ -261,7 +261,7 @@ class TestCalculateMetrics:
                 reason="scheduled",
             ),
         ]
-        
+
         daily_values = [Decimal("10000")] * 365 + [Decimal("12000")]
 
         metrics = calculate_metrics(

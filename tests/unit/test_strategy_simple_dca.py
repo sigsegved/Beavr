@@ -1,6 +1,6 @@
 """Tests for Simple DCA strategy."""
 
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 
 import pandas as pd

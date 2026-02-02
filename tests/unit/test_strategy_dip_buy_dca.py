@@ -1,6 +1,6 @@
 """Tests for Dip Buy DCA strategy (Hybrid DCA + Dip Buy)."""
 
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 
 import pandas as pd
@@ -185,7 +185,7 @@ class TestDipBuyDCAStrategy:
         strategy = DipBuyDCAStrategy(params)
 
         bars = self.create_bars()
-        
+
         # First day buy
         ctx1 = self.create_context(
             bars=bars,
@@ -198,7 +198,7 @@ class TestDipBuyDCAStrategy:
         # Simulate 4 dip buys (max)
         prices = [Decimal("98.50"), Decimal("97.00"), Decimal("95.50"), Decimal("94.00")]
         spent = Decimal("500")
-        
+
         for i, price in enumerate(prices):
             ctx = self.create_context(
                 bars=bars,
@@ -222,7 +222,7 @@ class TestDipBuyDCAStrategy:
             is_first_trading_day=False,
         )
         signals5 = strategy.evaluate(ctx5)
-        
+
         # No dip buy (max reached), and not in fallback period
         assert len(signals5) == 0
 
@@ -319,7 +319,7 @@ class TestDipBuyDCAStrategy:
             is_first_trading_day=False,
         )
         signals2 = strategy.evaluate(ctx2)
-        
+
         # No buy because $12.50 < $50 min
         assert len(signals2) == 0
 
@@ -428,7 +428,7 @@ class TestDipBuyDCAStrategy:
         strategy = DipBuyDCAStrategy(params)
 
         bars = self.create_bars()
-        
+
         # January first day
         ctx_jan1 = self.create_context(
             bars=bars,

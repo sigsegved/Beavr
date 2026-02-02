@@ -1,17 +1,13 @@
 """Tests for backtest engine."""
 
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
-from unittest.mock import MagicMock
 
 import pandas as pd
 import pytest
 
 from beavr.backtest.engine import BacktestEngine, BacktestResult
 from beavr.models.config import SimpleDCAParams
-from beavr.models.signal import Signal
-from beavr.strategies.base import BaseStrategy
-from beavr.strategies.context import StrategyContext
 from beavr.strategies.simple_dca import SimpleDCAStrategy
 
 

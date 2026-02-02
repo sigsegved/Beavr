@@ -37,7 +37,7 @@ def _load_config(config_path: Path) -> dict:
         import tomllib
     except ImportError:
         import tomli as tomllib  # type: ignore[import-not-found]
-    
+
     try:
         with open(config_path, "rb") as f:
             return tomllib.load(f)
@@ -50,16 +50,16 @@ def _load_config(config_path: Path) -> dict:
 def _get_alpaca_credentials() -> tuple[str, str]:
     """Get Alpaca API credentials from environment or config."""
     from beavr.core.config import load_app_config
-    
+
     config = load_app_config()
     api_key = config.alpaca.get_api_key()
     api_secret = config.alpaca.get_api_secret()
-    
+
     if not api_key or not api_secret:
         console.print("[red]Error: Alpaca API credentials not found.[/red]")
         console.print("[yellow]Set ALPACA_API_KEY and ALPACA_API_SECRET environment variables.[/yellow]")
         raise typer.Exit(1)
-    
+
     return api_key, api_secret
 
 
@@ -89,18 +89,18 @@ def run_backtest(
     from beavr.db.connection import Database
     from beavr.db.results import BacktestResultsRepository
     from beavr.strategies.registry import create_strategy, get_strategy
-    
+
     # Parse dates
     start_date = _parse_date(start)
     end_date = _parse_date(end)
-    
+
     if start_date >= end_date:
         console.print("[red]Error: Start date must be before end date.[/red]")
         raise typer.Exit(1)
-    
+
     # Parse symbols
     symbol_list = [s.strip().upper() for s in symbols.split(",")] if symbols else ["VOO"]
-    
+
     # Load strategy config if provided
     strategy_params: dict = {}
     if config:
@@ -112,67 +112,67 @@ def run_backtest(
         # Override symbols if in config
         if "symbols" in file_config:
             symbol_list = file_config["symbols"]
-    
+
     # Ensure symbols are in strategy params
     strategy_params["symbols"] = symbol_list
-    
+
     # Add hourly data option if enabled
     if hourly:
         strategy_params["use_hourly_data"] = True
-    
+
     # Verify strategy exists
     try:
         get_strategy(strategy)
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1)
-    
+
     # Create strategy instance
     try:
         strategy_instance = create_strategy(strategy, strategy_params)
     except Exception as e:
         console.print(f"[red]Error creating strategy: {e}[/red]")
         raise typer.Exit(1)
-    
+
     # Get API credentials and app config
     api_key, api_secret = _get_alpaca_credentials()
     app_config = load_app_config()
     app_config.ensure_data_dir()
-    
+
     # Set up dependencies
     db = Database(app_config.database_path)
     cache = BarCache(db)
-    
+
     # Create data fetcher
     data_fetcher = AlpacaDataFetcher(
         api_key=api_key,
         api_secret=api_secret,
         cache=cache,
     )
-    
+
     # Results repository
     results_repo = BacktestResultsRepository(db) if save else None
-    
+
     console.print(f"[bold]Running backtest: {strategy}[/bold]")
     console.print(f"Symbols: {', '.join(symbol_list)}")
     console.print(f"Period: {start_date} to {end_date}")
     console.print(f"Initial cash: ${cash:,.2f}")
     console.print()
-    
+
     with console.status("[bold green]Fetching data and running backtest..."):
         # Create and run engine
         engine = BacktestEngine(
             data_fetcher=data_fetcher,
             results_repo=results_repo,
         )
-        
+
         result = engine.run(
             strategy=strategy_instance,
             start_date=start_date,
             end_date=end_date,
             initial_cash=Decimal(str(cash)),
         )
-    
+
     # Output results
     if output == "json":
         console.print(export_to_json(result))
@@ -199,17 +199,17 @@ def compare_strategies(
     from beavr.db.cache import BarCache
     from beavr.db.connection import Database
     from beavr.strategies.registry import create_strategy, get_strategy
-    
+
     # Parse inputs
     start_date = _parse_date(start)
     end_date = _parse_date(end)
     symbol_list = [s.strip().upper() for s in symbols.split(",")] if symbols else ["VOO"]
     strategy_names = [s.strip() for s in strategies.split(",")]
-    
+
     if len(strategy_names) < 2:
         console.print("[red]Error: Provide at least 2 strategies to compare.[/red]")
         raise typer.Exit(1)
-    
+
     # Verify all strategies exist
     for name in strategy_names:
         try:
@@ -217,35 +217,35 @@ def compare_strategies(
         except ValueError as e:
             console.print(f"[red]Error: {e}[/red]")
             raise typer.Exit(1)
-    
+
     # Get API credentials and app config
     api_key, api_secret = _get_alpaca_credentials()
     app_config = load_app_config()
     app_config.ensure_data_dir()
-    
+
     # Set up dependencies
     db = Database(app_config.database_path)
     cache = BarCache(db)
-    
+
     data_fetcher = AlpacaDataFetcher(
         api_key=api_key,
         api_secret=api_secret,
         cache=cache,
     )
-    
+
     results = []
-    
+
     for name in strategy_names:
         console.print(f"Running backtest for [bold]{name}[/bold]...")
-        
+
         strategy_params = {"symbols": symbol_list}
         strategy_instance = create_strategy(name, strategy_params)
-        
+
         engine = BacktestEngine(
             data_fetcher=data_fetcher,
             results_repo=None,  # Don't save comparison runs
         )
-        
+
         result = engine.run(
             strategy=strategy_instance,
             start_date=start_date,
@@ -253,7 +253,7 @@ def compare_strategies(
             initial_cash=Decimal(str(cash)),
         )
         results.append(result)
-    
+
     print_comparison_table(results, console)
 
 @backtest_app.command("list")
@@ -267,11 +267,11 @@ def list_runs(
     from beavr.core.config import load_app_config
     from beavr.db.connection import Database
     from beavr.db.results import BacktestResultsRepository
-    
+
     app_config = load_app_config()
     db = Database(app_config.database_path)
     repo = BacktestResultsRepository(db)
-    
+
     runs = repo.list_runs(strategy_name=strategy, limit=limit)
     print_run_list(runs, console)
 
@@ -284,21 +284,21 @@ def show_run(
     from beavr.core.config import load_app_config
     from beavr.db.connection import Database
     from beavr.db.results import BacktestResultsRepository
-    
+
     app_config = load_app_config()
     db = Database(app_config.database_path)
     repo = BacktestResultsRepository(db)
-    
+
     run = repo.get_run(run_id)
     if not run:
         console.print(f"[red]Error: Run not found: {run_id}[/red]")
         raise typer.Exit(1)
-    
+
     # Get results too
     results = repo.get_results(run_id)
     if results:
         run.update(results)
-    
+
     print_run_detail(run, console)
 
 
@@ -314,19 +314,19 @@ def export_run(
     from beavr.core.config import load_app_config
     from beavr.db.connection import Database
     from beavr.db.results import BacktestResultsRepository
-    
+
     app_config = load_app_config()
     db = Database(app_config.database_path)
     repo = BacktestResultsRepository(db)
-    
+
     run = repo.get_run(run_id)
     if not run:
         console.print(f"[red]Error: Run not found: {run_id}[/red]")
         raise typer.Exit(1)
-    
+
     results = repo.get_results(run_id)
     trades = repo.get_trades(run_id)
-    
+
     if format == "json":
         import json
         data = {
@@ -357,7 +357,7 @@ def export_run(
     else:
         console.print(f"[red]Error: Unknown format: {format}[/red]")
         raise typer.Exit(1)
-    
+
     if output:
         output.write_text(content)
         console.print(f"[green]Exported to {output}[/green]")
@@ -369,22 +369,22 @@ def export_run(
 def list_strategies() -> None:
     """List available strategies."""
     from rich.table import Table
-    
+
     from beavr.strategies.registry import get_strategy_info, list_strategies
-    
+
     strategies = list_strategies()
-    
+
     if not strategies:
         console.print("[yellow]No strategies registered.[/yellow]")
         return
-    
+
     table = Table(show_header=True)
     table.add_column("Name", style="bold")
     table.add_column("Description")
-    
+
     for name in strategies:
         info = get_strategy_info(name)
         description = info.get("description", "") if info else ""
         table.add_row(name, description)
-    
+
     console.print(table)

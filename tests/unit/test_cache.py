@@ -167,7 +167,7 @@ class TestBarCacheGet:
 
         # Should return None because we don't have full range coverage
         assert result is None
-        
+
         # But if we request just what we have, it should work
         result = cache.get_bars("SPY", date(2024, 1, 16), date(2024, 1, 16))
         assert result is not None

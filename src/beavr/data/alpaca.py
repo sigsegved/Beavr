@@ -8,8 +8,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Dict, Optional
 
 import pandas as pd
-from alpaca.data import StockHistoricalDataClient, CryptoHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest, CryptoBarsRequest
+from alpaca.data import CryptoHistoricalDataClient, StockHistoricalDataClient
+from alpaca.data.requests import CryptoBarsRequest, StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
 if TYPE_CHECKING:

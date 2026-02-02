@@ -62,7 +62,7 @@ class BuyAndHoldStrategy(BaseStrategy):
             return []
 
         signals = []
-        
+
         # Buy all symbols with equal allocation
         amount_per_symbol = ctx.cash / Decimal(len(self.params.symbols))
 

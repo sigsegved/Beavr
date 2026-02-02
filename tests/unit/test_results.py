@@ -109,7 +109,7 @@ class TestCreateRun:
             end_date=date(2023, 12, 31),
             initial_cash=Decimal("10000"),
         )
-        
+
         assert run_id is not None
         assert len(run_id) == 36  # UUID format
         assert "-" in run_id
@@ -123,9 +123,9 @@ class TestCreateRun:
             end_date=date(2023, 12, 31),
             initial_cash=Decimal("10000"),
         )
-        
+
         run = repo.get_run(run_id)
-        
+
         assert run is not None
         assert run["strategy_name"] == "simple_dca"
         assert run["config"] == {"amount": 100}
@@ -147,9 +147,9 @@ class TestSaveResults:
             initial_cash=Decimal("10000"),
         )
         metrics = make_metrics()
-        
+
         repo.save_results(run_id, metrics)
-        
+
         results = repo.get_results(run_id)
         assert results is not None
         assert results.final_value == Decimal("11000")
@@ -165,9 +165,9 @@ class TestSaveResults:
             initial_cash=Decimal("10000"),
         )
         metrics = make_metrics()
-        
+
         repo.save_results(run_id, metrics)
-        
+
         results = repo.get_results(run_id)
         assert results.holdings == {"SPY": Decimal("10.5"), "VOO": Decimal("5.25")}
 
@@ -180,13 +180,13 @@ class TestSaveResults:
             end_date=date(2023, 12, 31),
             initial_cash=Decimal("10000"),
         )
-        
+
         # Save first
         repo.save_results(run_id, make_metrics(final_value=Decimal("11000")))
-        
+
         # Save again with different value
         repo.save_results(run_id, make_metrics(final_value=Decimal("12000")))
-        
+
         results = repo.get_results(run_id)
         assert results.final_value == Decimal("12000")
 
@@ -204,9 +204,9 @@ class TestSaveTrades:
             initial_cash=Decimal("10000"),
         )
         trade = make_trade()
-        
+
         repo.save_trade(run_id, trade)
-        
+
         trades = repo.get_trades(run_id)
         assert len(trades) == 1
         assert trades[0].symbol == "SPY"
@@ -226,9 +226,9 @@ class TestSaveTrades:
             make_trade(symbol="VOO"),
             make_trade(symbol="QQQ"),
         ]
-        
+
         repo.save_trades(run_id, trades)
-        
+
         saved_trades = repo.get_trades(run_id)
         assert len(saved_trades) == 3
         symbols = {t.symbol for t in saved_trades}
@@ -243,9 +243,9 @@ class TestSaveTrades:
             end_date=date(2023, 12, 31),
             initial_cash=Decimal("10000"),
         )
-        
+
         repo.save_trades(run_id, [])
-        
+
         trades = repo.get_trades(run_id)
         assert len(trades) == 0
 
@@ -267,9 +267,9 @@ class TestGetRun:
             end_date=date(2023, 12, 31),
             initial_cash=Decimal("10000"),
         )
-        
+
         run = repo.get_run(run_id)
-        
+
         assert "created_at" in run
         assert isinstance(run["created_at"], datetime)
 
@@ -297,9 +297,9 @@ class TestGetResults:
             total_trades=5,
             total_invested=Decimal("10000.50"),
         )
-        
+
         repo.save_results(run_id, metrics)
-        
+
         results = repo.get_results(run_id)
         assert isinstance(results.final_value, Decimal)
         assert isinstance(results.total_invested, Decimal)
@@ -362,9 +362,9 @@ class TestListRuns:
             end_date=date(2023, 12, 31),
             initial_cash=Decimal("10000"),
         )
-        
+
         runs = repo.list_runs()
-        
+
         assert len(runs) == 2
 
     def test_list_runs_filter_by_strategy(self, repo):
@@ -383,9 +383,9 @@ class TestListRuns:
             end_date=date(2023, 12, 31),
             initial_cash=Decimal("10000"),
         )
-        
+
         runs = repo.list_runs(strategy_name="simple_dca")
-        
+
         assert len(runs) == 1
         assert runs[0]["strategy_name"] == "simple_dca"
 
@@ -399,9 +399,9 @@ class TestListRuns:
             initial_cash=Decimal("10000"),
         )
         repo.save_results(run_id, make_metrics())
-        
+
         runs = repo.list_runs()
-        
+
         assert len(runs) == 1
         assert "final_value" in runs[0]
         assert "total_return" in runs[0]
@@ -417,9 +417,9 @@ class TestListRuns:
                 end_date=date(2023, 12, 31),
                 initial_cash=Decimal("10000"),
             )
-        
+
         runs = repo.list_runs(limit=3)
-        
+
         assert len(runs) == 3
 
 
@@ -435,9 +435,9 @@ class TestDeleteRun:
             end_date=date(2023, 12, 31),
             initial_cash=Decimal("10000"),
         )
-        
+
         deleted = repo.delete_run(run_id)
-        
+
         assert deleted is True
         assert repo.get_run(run_id) is None
 
@@ -457,8 +457,8 @@ class TestDeleteRun:
         )
         repo.save_results(run_id, make_metrics())
         repo.save_trade(run_id, make_trade())
-        
+
         repo.delete_run(run_id)
-        
+
         assert repo.get_results(run_id) is None
         assert repo.get_trades(run_id) == []
