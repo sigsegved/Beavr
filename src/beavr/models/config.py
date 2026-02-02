@@ -366,7 +366,7 @@ class VolatilitySwingParams(BaseModel):
 
     Buy dips, sell bounces. Designed for volatile assets (BTC, TSLA, NVDA).
     Capital is recycled - no monthly budget reset.
-    
+
     Logic:
         - Buy when price drops by dip_threshold from recent high
         - Sell when price rises by profit_target from purchase price

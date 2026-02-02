@@ -150,7 +150,7 @@ class TestDatabase:
         """Test that nested directories are created."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / "nested" / "dir" / "test.db"
-            db = Database(db_path)
+            Database(db_path)  # Creates the database file
 
             # File should exist in nested directory
             assert db_path.exists()

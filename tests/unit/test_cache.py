@@ -29,7 +29,6 @@ def make_bars_df(
     volumes: list[int],
 ) -> pd.DataFrame:
     """Helper to create a bars DataFrame."""
-    n = len(dates)
     return pd.DataFrame({
         "timestamp": pd.to_datetime(dates),
         "open": prices,

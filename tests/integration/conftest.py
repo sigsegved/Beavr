@@ -17,7 +17,7 @@ def pytest_configure(config):
 @pytest.fixture
 def alpaca_credentials() -> tuple[str, str]:
     """Get Alpaca API credentials from environment.
-    
+
     Skips test if credentials are not available.
     """
     api_key = os.environ.get("ALPACA_API_KEY")

@@ -79,7 +79,7 @@ module = [
 ignore_missing_imports = true
 
 [tool.ruff]
-line-length = 100
+line-length = 120
 target-version = "py39"
 src = ["src", "tests"]
 
@@ -98,10 +98,21 @@ select = [
 ignore = [
     "E501",   # line too long (handled by formatter)
     "B008",   # do not perform function calls in argument defaults
+    "B027",   # empty method in abstract base class without abstract decorator
     "UP006",  # Use dict instead of Dict - causes Python 3.9 issues with Pydantic
     "UP007",  # Use X | Y instead of Union - causes Python 3.9 issues with Pydantic
     "UP035",  # deprecated typing imports - needed for Python 3.9
     "UP045",  # Use X | None instead of Optional - causes Python 3.9 issues with Pydantic
+    "SIM103", # return condition directly
+    "SIM105", # use contextlib.suppress
+    "SIM108", # use ternary operator
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = [
+    "ARG001",  # unused function argument (common in test fixtures)
+    "ARG002",  # unused method argument (common in test mocks)
+    "B017",    # assert blind exception
 ]
 
 [tool.ruff.lint.isort]

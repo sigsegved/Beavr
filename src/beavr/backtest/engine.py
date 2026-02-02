@@ -331,10 +331,7 @@ class BacktestEngine:
                 historical_bars[symbol] = historical
 
         # Get current positions
-        positions = {
-            symbol: shares
-            for symbol, shares in portfolio.positions.items()
-        }
+        positions = dict(portfolio.positions.items())
 
         # Calculate calendar helpers
         days_to_month_end = self._days_to_month_end(trading_days, current_index)

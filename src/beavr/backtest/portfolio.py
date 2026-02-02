@@ -252,13 +252,13 @@ class SimulatedPortfolio:
     def get_state(
         self,
         timestamp: datetime,
-        prices: dict[str, Decimal],
+        prices: dict[str, Decimal],  # noqa: ARG002
     ) -> PortfolioState:
         """Get current state as PortfolioState model.
 
         Args:
             timestamp: Current timestamp
-            prices: Current prices by symbol
+            prices: Current prices by symbol (reserved for future use)
 
         Returns:
             PortfolioState snapshot

@@ -103,7 +103,6 @@ class DipBuyDCAStrategy(BaseStrategy):
                 continue
 
             price = ctx.prices[symbol]
-            bars = ctx.bars.get(symbol, None) if ctx.bars else None
 
             # 1. First trading day of month: Buy base amount (DCA portion)
             if ctx.is_first_trading_day_of_month and self.params.base_buy_pct > 0:

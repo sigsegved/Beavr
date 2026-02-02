@@ -27,8 +27,8 @@ def _parse_date(date_str: str) -> date:
     """Parse a date string in YYYY-MM-DD format."""
     try:
         return datetime.strptime(date_str, "%Y-%m-%d").date()
-    except ValueError:
-        raise typer.BadParameter(f"Invalid date format: {date_str}. Use YYYY-MM-DD.")
+    except ValueError as e:
+        raise typer.BadParameter(f"Invalid date format: {date_str}. Use YYYY-MM-DD.") from e
 
 
 def _load_config(config_path: Path) -> dict:
@@ -41,10 +41,10 @@ def _load_config(config_path: Path) -> dict:
     try:
         with open(config_path, "rb") as f:
             return tomllib.load(f)
-    except FileNotFoundError:
-        raise typer.BadParameter(f"Config file not found: {config_path}")
+    except FileNotFoundError as e:
+        raise typer.BadParameter(f"Config file not found: {config_path}") from e
     except Exception as e:
-        raise typer.BadParameter(f"Error reading config file: {e}")
+        raise typer.BadParameter(f"Error reading config file: {e}") from e
 
 
 def _get_alpaca_credentials() -> tuple[str, str]:
@@ -125,14 +125,14 @@ def run_backtest(
         get_strategy(strategy)
     except ValueError as e:
         console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     # Create strategy instance
     try:
         strategy_instance = create_strategy(strategy, strategy_params)
     except Exception as e:
         console.print(f"[red]Error creating strategy: {e}[/red]")
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     # Get API credentials and app config
     api_key, api_secret = _get_alpaca_credentials()
@@ -216,7 +216,7 @@ def compare_strategies(
             get_strategy(name)
         except ValueError as e:
             console.print(f"[red]Error: {e}[/red]")
-            raise typer.Exit(1)
+            raise typer.Exit(1) from e
 
     # Get API credentials and app config
     api_key, api_secret = _get_alpaca_credentials()

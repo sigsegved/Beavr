@@ -261,7 +261,7 @@ class TestBacktestEngine:
         )
 
         # Should have trades for both symbols
-        symbols_traded = set(t.symbol for t in result.trades)
+        symbols_traded = {t.symbol for t in result.trades}
         assert "SPY" in symbols_traded
         assert "QQQ" in symbols_traded
 
