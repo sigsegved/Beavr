@@ -8,8 +8,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Dict, Optional
 
 import pandas as pd
-from alpaca.data import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
+from alpaca.data import StockHistoricalDataClient, CryptoHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest, CryptoBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
 if TYPE_CHECKING:
@@ -55,8 +55,13 @@ class AlpacaDataFetcher:
             api_secret: Alpaca API secret
             cache: Optional BarCache instance for caching
         """
-        self.client = StockHistoricalDataClient(api_key, api_secret)
+        self.stock_client = StockHistoricalDataClient(api_key, api_secret)
+        self.crypto_client = CryptoHistoricalDataClient(api_key, api_secret)
         self.cache = cache
+
+    def _is_crypto(self, symbol: str) -> bool:
+        """Check if symbol is a crypto pair (contains /)."""
+        return "/" in symbol
 
     def get_bars(
         self,
@@ -134,7 +139,7 @@ class AlpacaDataFetcher:
         Direct Alpaca API call to fetch bars.
 
         Args:
-            symbol: Stock symbol
+            symbol: Stock symbol or crypto pair (e.g., "BTC/USD")
             start: Start date
             end: End date
             timeframe: Bar timeframe
@@ -148,20 +153,29 @@ class AlpacaDataFetcher:
         # Map timeframe string to Alpaca TimeFrame
         tf = self._get_timeframe(timeframe)
 
-        # Build request
         # Use start of day for start, end of day for end
         start_dt = datetime.combine(start, time.min)
         end_dt = datetime.combine(end, time(23, 59, 59))
 
-        request = StockBarsRequest(
-            symbol_or_symbols=symbol,
-            start=start_dt,
-            end=end_dt,
-            timeframe=tf,
-        )
-
         try:
-            bars_response = self.client.get_stock_bars(request)
+            if self._is_crypto(symbol):
+                # Use crypto client for crypto pairs
+                request = CryptoBarsRequest(
+                    symbol_or_symbols=symbol,
+                    start=start_dt,
+                    end=end_dt,
+                    timeframe=tf,
+                )
+                bars_response = self.crypto_client.get_crypto_bars(request)
+            else:
+                # Use stock client for stocks
+                request = StockBarsRequest(
+                    symbol_or_symbols=symbol,
+                    start=start_dt,
+                    end=end_dt,
+                    timeframe=tf,
+                )
+                bars_response = self.stock_client.get_stock_bars(request)
         except Exception as e:
             raise AlpacaAPIError(f"Failed to fetch bars for {symbol}: {e}") from e
 

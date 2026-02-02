@@ -96,7 +96,7 @@ class SimpleDCAParams(BaseModel):
 
     symbols: list[str] = Field(default=["SPY"], description="Symbols to buy")
     amount: Decimal = Field(
-        default=Decimal("500"),
+        default=Decimal("1250"),
         description="Dollar amount per buy",
         ge=Decimal("1"),
     )
@@ -120,34 +120,86 @@ class SimpleDCAParams(BaseModel):
     model_config = ConfigDict(frozen=True)
 
 
+class BuyAndHoldParams(BaseModel):
+    """Parameters for Buy and Hold strategy.
+
+    Buy once at the start, hold forever. Classic passive investing.
+    """
+
+    symbols: list[str] = Field(default=["SPY"], description="Symbols to buy")
+    # No other params - just buy all cash on day 1
+
+    model_config = ConfigDict(frozen=True)
+
+
 class DipBuyDCAParams(BaseModel):
     """Parameters for Dip Buy DCA strategy.
 
-    Buy on dips throughout the period, with fallback at period end.
+    Hybrid DCA + Dip buying: Deploy base amount at month start,
+    then buy dips with remaining budget throughout the month.
+    Proportional buying: deeper dips trigger larger purchases.
     """
 
     symbols: list[str] = Field(default=["SPY"], description="Symbols to buy")
     monthly_budget: Decimal = Field(
-        default=Decimal("500"),
+        default=Decimal("1000"),
         description="Total budget per month",
         ge=Decimal("1"),
     )
-    dip_threshold: float = Field(
-        default=0.02,
-        description="Buy when price drops this % from recent high",
-        ge=0.01,
+    base_buy_pct: float = Field(
+        default=0.50,
+        description="Fraction of monthly budget to buy on first trading day (DCA portion)",
+        ge=0.0,
+        le=1.0,
+    )
+    # Proportional dip tiers: [threshold, buy_pct]
+    # Buy more as the dip gets deeper
+    dip_tier_1: float = Field(
+        default=0.01,
+        description="Tier 1: Small dip threshold (e.g., 1%)",
+        ge=0.005,
         le=0.10,
     )
-    dip_buy_pct: float = Field(
-        default=0.50,
-        description="Fraction of remaining budget to deploy on dip",
+    dip_tier_1_pct: float = Field(
+        default=0.20,
+        description="Buy this fraction of remaining budget on Tier 1 dip",
+        ge=0.05,
+        le=1.0,
+    )
+    dip_tier_2: float = Field(
+        default=0.02,
+        description="Tier 2: Medium dip threshold (e.g., 2%)",
+        ge=0.01,
+        le=0.15,
+    )
+    dip_tier_2_pct: float = Field(
+        default=0.40,
+        description="Buy this fraction of remaining budget on Tier 2 dip",
         ge=0.1,
         le=1.0,
     )
+    dip_tier_3: float = Field(
+        default=0.03,
+        description="Tier 3: Large dip threshold (e.g., 3%+)",
+        ge=0.02,
+        le=0.20,
+    )
+    dip_tier_3_pct: float = Field(
+        default=0.75,
+        description="Buy this fraction of remaining budget on Tier 3 dip",
+        ge=0.2,
+        le=1.0,
+    )
+    max_dip_buys: int = Field(
+        default=8,
+        description="Maximum number of dip buys per month",
+        ge=1,
+        le=20,
+    )
     lookback_days: int = Field(
-        default=5,
+        default=1,
         description="Days to look back for recent high",
-        ge=2,
+        ge=1,
         le=20,
     )
     fallback_days: int = Field(
@@ -162,8 +214,220 @@ class DipBuyDCAParams(BaseModel):
         ge=Decimal("1"),
     )
     use_hourly_data: bool = Field(
-        default=False,
+        default=True,
         description="Use hourly data for better dip detection",
+    )
+    lookback_hours: int = Field(
+        default=24,
+        description="Hours to look back for recent high (when using hourly data)",
+        ge=6,
+        le=168,
+    )
+
+    model_config = ConfigDict(frozen=True)
+
+
+class RSIDCAParams(BaseModel):
+    """Parameters for RSI-based DCA strategy.
+
+    Hybrid DCA + RSI buying: Deploy base amount at month start,
+    then buy based on RSI (Relative Strength Index) levels.
+    Lower RSI = more oversold = buy more aggressively.
+    """
+
+    symbols: list[str] = Field(default=["SPY"], description="Symbols to buy")
+    monthly_budget: Decimal = Field(
+        default=Decimal("1000"),
+        description="Total budget per month",
+        ge=Decimal("1"),
+    )
+    base_buy_pct: float = Field(
+        default=0.50,
+        description="Fraction of monthly budget to buy on first trading day (DCA portion)",
+        ge=0.0,
+        le=1.0,
+    )
+    rsi_period: int = Field(
+        default=14,
+        description="Number of periods for RSI calculation",
+        ge=5,
+        le=30,
+    )
+    # RSI tiers: [threshold, buy_pct] - lower RSI = more oversold = buy more
+    rsi_tier_1: int = Field(
+        default=40,
+        description="Tier 1: Moderately oversold RSI threshold",
+        ge=30,
+        le=50,
+    )
+    rsi_tier_1_pct: float = Field(
+        default=0.20,
+        description="Buy this fraction of remaining budget when RSI < Tier 1",
+        ge=0.05,
+        le=1.0,
+    )
+    rsi_tier_2: int = Field(
+        default=30,
+        description="Tier 2: Oversold RSI threshold",
+        ge=20,
+        le=40,
+    )
+    rsi_tier_2_pct: float = Field(
+        default=0.40,
+        description="Buy this fraction of remaining budget when RSI < Tier 2",
+        ge=0.1,
+        le=1.0,
+    )
+    rsi_tier_3: int = Field(
+        default=25,
+        description="Tier 3: Extremely oversold RSI threshold",
+        ge=10,
+        le=35,
+    )
+    rsi_tier_3_pct: float = Field(
+        default=0.75,
+        description="Buy this fraction of remaining budget when RSI < Tier 3",
+        ge=0.2,
+        le=1.0,
+    )
+    max_rsi_buys: int = Field(
+        default=8,
+        description="Maximum number of RSI-triggered buys per month",
+        ge=1,
+        le=20,
+    )
+    fallback_days: int = Field(
+        default=3,
+        description="Days before month-end to trigger fallback buy",
+        ge=1,
+        le=5,
+    )
+    min_buy_amount: Decimal = Field(
+        default=Decimal("25"),
+        description="Minimum order size in dollars",
+        ge=Decimal("1"),
+    )
+
+    model_config = ConfigDict(frozen=True)
+
+
+class MACrossoverDCAParams(BaseModel):
+    """Parameters for MA Crossover DCA strategy.
+
+    Regular DCA + extra buys when short MA crosses below long MA (death cross).
+    When death cross occurs, deploy extra funds from surplus to buy the dip.
+    """
+
+    symbols: list[str] = Field(default=["SPY"], description="Symbols to buy")
+    monthly_budget: Decimal = Field(
+        default=Decimal("1000"),
+        description="Regular monthly DCA amount",
+        ge=Decimal("1"),
+    )
+    surplus_budget: Decimal = Field(
+        default=Decimal("12000"),
+        description="Total surplus fund available for death cross buys",
+        ge=Decimal("0"),
+    )
+    surplus_buy_amount: Decimal = Field(
+        default=Decimal("1000"),
+        description="Amount to deploy from surplus on each death cross",
+        ge=Decimal("1"),
+    )
+    short_ma_period: int = Field(
+        default=7,
+        description="Short moving average period (e.g., 7-day)",
+        ge=3,
+        le=20,
+    )
+    long_ma_period: int = Field(
+        default=30,
+        description="Long moving average period (e.g., 30-day)",
+        ge=10,
+        le=200,
+    )
+    min_buy_amount: Decimal = Field(
+        default=Decimal("25"),
+        description="Minimum order size in dollars",
+        ge=Decimal("1"),
+    )
+    cooldown_days: int = Field(
+        default=5,
+        description="Days to wait after a death cross buy before another",
+        ge=1,
+        le=30,
+    )
+
+    model_config = ConfigDict(frozen=True)
+
+
+class VolatilitySwingParams(BaseModel):
+    """Parameters for Volatility Swing strategy.
+
+    Buy dips, sell bounces. Designed for volatile assets (BTC, TSLA, NVDA).
+    Capital is recycled - no monthly budget reset.
+    
+    Logic:
+        - Buy when price drops by dip_threshold from recent high
+        - Sell when price rises by profit_target from purchase price
+        - Optional stop loss to limit downside
+    """
+
+    symbols: list[str] = Field(default=["TSLA"], description="Volatile symbols to trade")
+    position_size: Decimal = Field(
+        default=Decimal("1000"),
+        description="Dollar amount per position",
+        ge=Decimal("100"),
+    )
+    max_positions: int = Field(
+        default=5,
+        description="Maximum concurrent positions per symbol",
+        ge=1,
+        le=20,
+    )
+    dip_threshold: float = Field(
+        default=0.01,
+        description="Buy when price drops this % from recent high (e.g., 1%)",
+        ge=0.005,
+        le=0.20,
+    )
+    profit_target: float = Field(
+        default=0.02,
+        description="Sell when price rises this % from purchase (e.g., 2%)",
+        ge=0.005,
+        le=0.50,
+    )
+    stop_loss: float = Field(
+        default=1.0,
+        description="Sell if price drops this % from purchase (1.0 = disabled)",
+        ge=0.01,
+        le=1.0,
+    )
+    require_reversal_after_stop: bool = Field(
+        default=False,
+        description="After stop loss, wait for reversal before buying again",
+    )
+    reversal_threshold: float = Field(
+        default=0.02,
+        description="Price must rise this % from recent low to signal reversal",
+        ge=0.005,
+        le=0.10,
+    )
+    lookback_days: int = Field(
+        default=5,
+        description="Days to look back for recent high (for daily bars)",
+        ge=1,
+        le=30,
+    )
+    min_hold_days: int = Field(
+        default=0,
+        description="Minimum days to hold before selling",
+        ge=0,
+        le=30,
+    )
+    use_hourly_data: bool = Field(
+        default=True,
+        description="Use hourly data for better intraday swing detection",
     )
     lookback_hours: int = Field(
         default=24,

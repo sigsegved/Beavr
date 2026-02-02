@@ -1,3 +1,6 @@
+# Local development scripts (not for distribution)
+_scripts/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

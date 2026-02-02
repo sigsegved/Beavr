@@ -101,7 +101,7 @@ class TestSimpleDCAParams:
         """Test default Simple DCA parameters."""
         params = SimpleDCAParams()
         assert params.symbols == ["SPY"]
-        assert params.amount == Decimal("500")
+        assert params.amount == Decimal("1000")
         assert params.frequency == "monthly"
         assert params.day_of_month == 1
 
@@ -139,23 +139,31 @@ class TestDipBuyDCAParams:
         """Test default Dip Buy DCA parameters."""
         params = DipBuyDCAParams()
         assert params.symbols == ["SPY"]
-        assert params.monthly_budget == Decimal("500")
-        assert params.dip_threshold == 0.02
-        assert params.dip_buy_pct == 0.50
-        assert params.lookback_days == 5
+        assert params.monthly_budget == Decimal("1000")
+        assert params.base_buy_pct == 0.50
+        assert params.dip_tier_1 == 0.01
+        assert params.dip_tier_1_pct == 0.20
+        assert params.dip_tier_2 == 0.02
+        assert params.dip_tier_2_pct == 0.40
+        assert params.dip_tier_3 == 0.03
+        assert params.dip_tier_3_pct == 0.75
+        assert params.max_dip_buys == 8
+        assert params.lookback_days == 1
         assert params.fallback_days == 3
 
-    def test_validation_dip_threshold(self) -> None:
-        """Test dip_threshold validation."""
-        # Too low
+    def test_validation_dip_tiers(self) -> None:
+        """Test dip tier validation."""
+        # Tier 1 too low (below 0.005)
         with pytest.raises(ValueError):
-            DipBuyDCAParams(dip_threshold=0.005)
-        # Too high
+            DipBuyDCAParams(dip_tier_1=0.001)
+        # Tier 3 too high (above 0.20)
         with pytest.raises(ValueError):
-            DipBuyDCAParams(dip_threshold=0.15)
-        # Valid
-        params = DipBuyDCAParams(dip_threshold=0.05)
-        assert params.dip_threshold == 0.05
+            DipBuyDCAParams(dip_tier_3=0.25)
+        # Valid tiers
+        params = DipBuyDCAParams(dip_tier_1=0.01, dip_tier_2=0.03, dip_tier_3=0.05)
+        assert params.dip_tier_1 == 0.01
+        assert params.dip_tier_2 == 0.03
+        assert params.dip_tier_3 == 0.05
 
 
 class TestBacktestConfig:

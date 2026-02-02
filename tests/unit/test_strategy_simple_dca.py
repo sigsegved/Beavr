@@ -256,7 +256,7 @@ class TestSimpleDCAStrategy:
         strategy = SimpleDCAStrategy(params)
 
         assert strategy.symbols == ["SPY"]
-        assert strategy.params.amount == Decimal("500")
+        assert strategy.params.amount == Decimal("1000")
         assert strategy.params.frequency == "monthly"
         assert strategy.params.day_of_month == 1
 
