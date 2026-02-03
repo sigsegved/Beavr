@@ -36,9 +36,9 @@ class SwingTradeSignal(BaseModel):
         description="Take profit as percentage above entry (e.g., 0.10 = 10%)",
     )
     position_size_pct: float = Field(
-        ge=0.01,
-        le=0.15,
-        description="Recommended position size as % of portfolio (max 15%)",
+        ge=0.05,
+        le=0.30,
+        description="Recommended position size as % of portfolio (15-30% for high conviction)",
     )
 
 
@@ -94,11 +94,12 @@ SELL SIGNALS TO LOOK FOR:
 - Large profit (>15%) - consider taking partial profits
 - Stop loss hit
 
-POSITION SIZING:
-- High conviction setups: 8-12% of portfolio
-- Medium conviction: 4-8% of portfolio
-- Low conviction or volatile market: 2-4% of portfolio
-- Never recommend more than 15% per position
+POSITION SIZING (BE AGGRESSIVE - PUT MONEY TO WORK!):
+- High conviction setups: 20-30% of portfolio
+- Medium conviction: 15-20% of portfolio  
+- Low conviction: 10-15% of portfolio
+- We want to be FULLY INVESTED, not sitting in cash
+- Minimum position size should be 10% of portfolio
 
 RISK MANAGEMENT:
 - Stop loss: 3-7% below entry for longs (wider for volatile stocks)

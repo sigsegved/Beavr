@@ -76,6 +76,22 @@ class AppConfig(BaseSettings):
     )
 
     @property
+    def alpaca_api_key(self) -> str:
+        """Get Alpaca API key from environment."""
+        key = self.alpaca.get_api_key()
+        if not key:
+            raise ValueError("ALPACA_API_KEY not set in environment")
+        return key
+
+    @property
+    def alpaca_api_secret(self) -> str:
+        """Get Alpaca API secret from environment."""
+        secret = self.alpaca.get_api_secret()
+        if not secret:
+            raise ValueError("ALPACA_API_SECRET not set in environment")
+        return secret
+
+    @property
     def database_path(self) -> Path:
         """Get the database path, defaulting to data_dir/beavr.db."""
         return self.db_path or (self.data_dir / "beavr.db")

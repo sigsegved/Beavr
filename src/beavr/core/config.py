@@ -62,6 +62,23 @@ def load_app_config() -> AppConfig:
     return AppConfig()
 
 
+# Singleton settings instance
+_settings: AppConfig | None = None
+
+
+def get_settings() -> AppConfig:
+    """Get or create the settings singleton.
+    
+    This ensures we only load settings once and reuse them.
+    """
+    global _settings
+    if _settings is None:
+        from dotenv import load_dotenv
+        load_dotenv()  # Ensure .env is loaded
+        _settings = AppConfig()
+    return _settings
+
+
 def get_default_strategies_dir() -> Path:
     """Get the default strategies directory.
 

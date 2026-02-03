@@ -1,10 +1,13 @@
 {
-  "timestamp": "2026-02-03T08:29:43.921051",
-  "portfolio_value": "9997.61",
-  "cash": "9997.61",
-  "daily_pnl": "0.00",
-  "daily_pnl_pct": 0.0,
+  "timestamp": "2026-02-03T10:00:48.757847",
+  "portfolio_value": "9983.52",
+  "cash": "8499.31",
+  "daily_pnl": "-14.13",
+  "daily_pnl_pct": -0.14133321330512671,
   "trades_today": 0,
-  "positions": {},
+  "positions": {
+    "NVDA": "1.1158",
+    "PYPL": "30.7868"
+  },
   "is_running": true
 }
