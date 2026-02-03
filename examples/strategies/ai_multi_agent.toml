@@ -1,0 +1,18 @@
+# AI Multi-Agent Strategy Configuration
+# Copy this file and customize for your needs
+
+[strategy]
+name = "ai_multi_agent"
+
+[params]
+# Symbols to trade - diversified portfolio
+symbols = ["SPY", "QQQ", "AAPL", "MSFT", "GOOGL"]
+
+# Risk Management
+max_drawdown = 0.20        # 20% max drawdown triggers kill switch
+max_position_pct = 0.10    # Max 10% of portfolio per position
+min_cash_pct = 0.05        # Keep 5% cash buffer
+
+# LLM Configuration
+llm_model = "gpt-4o-mini"  # Cost-effective model for MVP
+llm_temperature = 0.3      # Lower = more consistent decisions

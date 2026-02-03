@@ -169,11 +169,13 @@ class AlpacaDataFetcher:
                 bars_response = self.crypto_client.get_crypto_bars(request)
             else:
                 # Use stock client for stocks
+                # Use IEX feed for free tier (SIP requires paid subscription)
                 request = StockBarsRequest(
                     symbol_or_symbols=symbol,
                     start=start_dt,
                     end=end_dt,
                     timeframe=tf,
+                    feed="iex",  # Free tier uses IEX data
                 )
                 bars_response = self.stock_client.get_stock_bars(request)
         except Exception as e:

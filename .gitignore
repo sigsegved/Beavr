@@ -214,4 +214,4 @@ __marimo__/
 # Beavr specific
 *.db
 *.sqlite
-.beavr/
+.beavr/logs/

@@ -5,6 +5,7 @@ This module provides:
 - StrategyContext: Context provided to strategies during evaluation
 - Strategy registry for discovering and loading strategies
 - Built-in strategies: SimpleDCA, DipBuyDCA, BuyAndHold
+- AI strategies: MultiAgentStrategy
 """
 
 from beavr.strategies.base import BaseStrategy
@@ -21,6 +22,14 @@ from beavr.strategies.registry import (
 )
 from beavr.strategies.simple_dca import SimpleDCAStrategy
 
+# Import AI strategy to register it
+try:
+    from beavr.strategies.ai.multi_agent import MultiAgentStrategy
+    _AI_AVAILABLE = True
+except ImportError:
+    _AI_AVAILABLE = False
+    MultiAgentStrategy = None  # type: ignore
+
 __all__ = [
     "BaseStrategy",
     "StrategyContext",
@@ -34,4 +43,7 @@ __all__ = [
     "create_strategy",
     "clear_registry",
 ]
+
+if _AI_AVAILABLE:
+    __all__.append("MultiAgentStrategy")
 

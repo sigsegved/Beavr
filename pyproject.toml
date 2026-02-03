@@ -32,6 +32,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+ai = [
+    "openai>=1.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
@@ -39,9 +42,13 @@ dev = [
     "mypy>=1.8",
     "pandas-stubs>=2.0",
 ]
+all = [
+    "beavr[ai,dev]",
+]
 
 [project.scripts]
 bvr = "beavr.cli.main:app"
+bvr-paper = "beavr.paper_trading:main"
 
 [build-system]
 requires = ["hatchling"]
