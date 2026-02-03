@@ -95,6 +95,16 @@ class LLMClient:
         if self._session is None:
             self._session = await self._client.create_session({"model": self.config.model})
 
+    async def _recreate_session_async(self):
+        """Recreate the session if it was lost."""
+        try:
+            if self._session:
+                await self._session.destroy()
+        except Exception:
+            pass
+        self._session = None
+        await self._ensure_session_async()
+
     async def _reason_async(
         self,
         system_prompt: str,
@@ -122,11 +132,28 @@ You MUST respond with ONLY valid JSON matching this schema (no markdown, no code
 
 Return your analysis as valid JSON now:"""
 
-        # Use send_and_wait for simplicity
-        response = await self._session.send_and_wait(
-            {"prompt": full_prompt},
-            timeout=self.config.timeout
-        )
+        # Use send_and_wait for simplicity, with retry on session errors
+        max_retries = 2
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                response = await self._session.send_and_wait(
+                    {"prompt": full_prompt},
+                    timeout=self.config.timeout
+                )
+                break
+            except Exception as e:
+                last_error = e
+                error_str = str(e)
+                # Check for session not found error
+                if "Session not found" in error_str or "session" in error_str.lower():
+                    logger.debug(f"Session error, recreating session (attempt {attempt + 1})")
+                    await self._recreate_session_async()
+                else:
+                    raise
+        else:
+            raise RuntimeError(f"Failed after {max_retries} retries: {last_error}")
 
         if not response or not response.data.content:
             raise RuntimeError("Empty response from LLM")
@@ -192,10 +219,26 @@ Return your analysis as valid JSON now:"""
         if system_prompt:
             full_prompt = f"{system_prompt}\n\n{prompt}"
 
-        response = await self._session.send_and_wait(
-            {"prompt": full_prompt},
-            timeout=self.config.timeout
-        )
+        max_retries = 2
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                response = await self._session.send_and_wait(
+                    {"prompt": full_prompt},
+                    timeout=self.config.timeout
+                )
+                break
+            except Exception as e:
+                last_error = e
+                error_str = str(e)
+                if "Session not found" in error_str or "session" in error_str.lower():
+                    logger.debug(f"Session error in complete(), recreating (attempt {attempt + 1})")
+                    await self._recreate_session_async()
+                else:
+                    raise
+        else:
+            raise RuntimeError(f"Failed after {max_retries} retries: {last_error}")
         
         if not response or not response.data.content:
             return ""
