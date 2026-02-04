@@ -62,7 +62,49 @@ CREATE TABLE IF NOT EXISTS backtest_trades (
 );
 
 CREATE INDEX IF NOT EXISTS idx_backtest_trades_run ON backtest_trades(run_id);
+
+-- ai_positions: Track AI investor positions with stop/target levels
+-- This integrates AI trading with the main portfolio tracking system
+CREATE TABLE IF NOT EXISTS ai_positions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    quantity REAL NOT NULL,
+    entry_price REAL NOT NULL,
+    entry_amount REAL NOT NULL,
+    stop_loss_pct REAL NOT NULL,
+    target_pct REAL NOT NULL,
+    strategy TEXT,
+    rationale TEXT,
+    status TEXT NOT NULL DEFAULT 'open',  -- open, closed_target, closed_stop, closed_manual
+    entry_timestamp TEXT NOT NULL,
+    exit_timestamp TEXT,
+    exit_price REAL,
+    exit_reason TEXT,
+    pnl REAL,
+    pnl_pct REAL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_positions_symbol ON ai_positions(symbol);
+CREATE INDEX IF NOT EXISTS idx_ai_positions_status ON ai_positions(status);
+
+-- ai_trades: All AI investor trade executions (both entry and exit)
+CREATE TABLE IF NOT EXISTS ai_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    position_id INTEGER,
+    symbol TEXT NOT NULL,
+    side TEXT NOT NULL,  -- BUY or SELL
+    quantity REAL NOT NULL,
+    price REAL NOT NULL,
+    amount REAL NOT NULL,
+    timestamp TEXT NOT NULL,
+    reason TEXT,
+    FOREIGN KEY (position_id) REFERENCES ai_positions(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_trades_position ON ai_trades(position_id);
+CREATE INDEX IF NOT EXISTS idx_ai_trades_symbol ON ai_trades(symbol);
 """
 
 # Version for future migrations
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2

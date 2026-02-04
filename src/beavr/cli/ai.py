@@ -7,10 +7,19 @@ Commands:
     bvr ai watch      - Monitor positions and auto-exit at targets
     bvr ai sell       - Sell positions (specific or all)
     bvr ai analyze    - Analyze market without trading
+    bvr ai history    - Show trade history and performance
+
+Stop/Target Tracking:
+    - AI positions are tracked in the SQLite database with entry price,
+      stop loss %, and target % for each position.
+    - Use 'bvr ai watch' to monitor positions and auto-exit when
+      targets or stops are hit.
+    - The watch command uses POLLING (not conditional orders).
+    - For production, consider using Alpaca's bracket orders for
+      server-side stop/target execution.
 """
 
 import logging
-import os
 import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -23,6 +32,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from beavr.core.config import get_settings
+from beavr.db import AIPositionsRepository, Database
 
 ai_app = typer.Typer(
     name="ai",
@@ -109,6 +119,22 @@ class AIInvestor:
         self._llm = None
         self._screener = None
         self._fetcher = None
+        self._db = None
+        self._positions_repo = None
+    
+    @property
+    def db(self):
+        """Lazy load database connection."""
+        if self._db is None:
+            self._db = Database()
+        return self._db
+    
+    @property
+    def positions_repo(self):
+        """Lazy load positions repository."""
+        if self._positions_repo is None:
+            self._positions_repo = AIPositionsRepository(self.db)
+        return self._positions_repo
     
     @property
     def trading(self):
@@ -524,9 +550,12 @@ def invest(
     stop: float = typer.Option(5.0, "--stop", "-s", help="Stop loss %"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Auto-confirm trades"),
     test: bool = typer.Option(False, "--test", help="Test mode (no real trades)"),
-    watch: bool = typer.Option(False, "--watch", "-w", help="Monitor after investing"),
 ) -> None:
-    """Invest a specified amount using AI analysis."""
+    """Invest a specified amount using AI analysis.
+    
+    Positions are tracked in the database with stop/target levels.
+    Use 'bvr ai watch' afterwards to monitor and auto-exit positions.
+    """
     investor = get_investor()
     amount_dec = Decimal(str(amount))
     
@@ -615,31 +644,42 @@ def invest(
         console.print("[red]No trades executed![/red]")
         raise typer.Exit(1)
     
+    # Track positions in database
+    if not test:
+        for pick in executed:
+            try:
+                investor.positions_repo.open_position(
+                    symbol=pick["symbol"],
+                    quantity=pick["amount"] / pick["price"],
+                    entry_price=pick["price"],
+                    stop_loss_pct=pick.get("stop_loss_pct", stop),
+                    target_pct=pick.get("target_pct", target),
+                    strategy=pick.get("strategy"),
+                    rationale=pick.get("rationale"),
+                )
+            except Exception as e:
+                logger.warning(f"Could not track {pick['symbol']} in DB: {e}")
+    
     total_executed = sum(p["amount"] for p in executed)
     console.print(f"\n[green]✅ Deployed ${total_executed:.2f} across {len(executed)} positions[/green]")
-    
-    # Watch mode
-    if watch and not test:
-        console.print(f"\n[bold]👁️  Monitoring every 5 minutes[/bold]")
-        console.print(f"  Target: +{target}% | Stop: -{stop}%")
-        console.print("  Press Ctrl+C to stop\n")
-        
-        try:
-            while True:
-                time.sleep(300)
-                _check_exits(investor, target, stop, test)
-        except KeyboardInterrupt:
-            console.print("\n[yellow]Stopped monitoring.[/yellow]")
+    console.print(f"\n[dim]Tip: Use 'bvr ai watch' to monitor positions and auto-exit at targets.[/dim]")
 
 
 @ai_app.command()
 def watch(
-    target: float = typer.Option(5.0, "--target", "-t", help="Profit target %"),
-    stop: float = typer.Option(5.0, "--stop", "-s", help="Stop loss %"),
+    target: float = typer.Option(5.0, "--target", "-t", help="Default profit target % (overridden by DB values)"),
+    stop: float = typer.Option(5.0, "--stop", "-s", help="Default stop loss % (overridden by DB values)"),
     interval: int = typer.Option(5, "--interval", "-i", help="Check interval (minutes)"),
     test: bool = typer.Option(False, "--test", help="Test mode (no real sells)"),
 ) -> None:
-    """Monitor positions and auto-exit at targets."""
+    """Monitor positions and auto-exit at targets.
+    
+    Uses stop/target levels from the database if available (set during invest).
+    Falls back to --target and --stop values for positions not in DB.
+    
+    Note: This uses POLLING, not conditional orders. For production use,
+    consider Alpaca's bracket orders for server-side stop/target execution.
+    """
     investor = get_investor()
     
     account = investor.get_account()
@@ -647,13 +687,28 @@ def watch(
         console.print("[yellow]No positions to watch.[/yellow]")
         raise typer.Exit(0)
     
+    # Show tracked positions from DB
+    db_positions = investor.positions_repo.get_open_positions()
+    db_symbols = {p.symbol for p in db_positions}
+    
     console.print(Panel.fit(
-        f"[bold]Profit Target:[/bold] +{target}%\n"
-        f"[bold]Stop Loss:[/bold] -{stop}%\n"
+        f"[bold]Default Target:[/bold] +{target}%\n"
+        f"[bold]Default Stop:[/bold] -{stop}%\n"
         f"[bold]Check Interval:[/bold] {interval} minutes\n"
+        f"[bold]DB-Tracked:[/bold] {len(db_positions)} positions\n"
         f"[bold]Mode:[/bold] {'TEST' if test else 'LIVE'}",
         title="👁️  Position Monitor",
     ))
+    
+    # Show positions with their targets
+    if db_positions:
+        console.print("\n[bold]Tracked Positions (from DB):[/bold]")
+        for p in db_positions:
+            console.print(f"  {p.symbol}: Stop -{p.stop_loss_pct}% | Target +{p.target_pct}%")
+    
+    untracked = set(account["positions"].keys()) - db_symbols
+    if untracked:
+        console.print(f"\n[dim]Untracked (using defaults): {', '.join(untracked)}[/dim]")
     
     console.print("\nPress Ctrl+C to stop\n")
     
@@ -672,8 +727,8 @@ def watch(
         console.print("\n[yellow]Stopped monitoring.[/yellow]")
 
 
-def _check_exits(investor: AIInvestor, target: float, stop: float, test: bool) -> None:
-    """Check positions for exit signals."""
+def _check_exits(investor: AIInvestor, default_target: float, default_stop: float, test: bool) -> None:
+    """Check positions for exit signals using DB-tracked or default stop/target levels."""
     account = investor.get_account()
     
     console.print(f"\n[dim]{datetime.now().strftime('%H:%M:%S')}[/dim] Checking positions...")
@@ -682,14 +737,37 @@ def _check_exits(investor: AIInvestor, target: float, stop: float, test: bool) -
         pnl_pct = pos["pnl_pct"]
         pnl_style = "green" if pos["pnl"] >= 0 else "red"
         
+        # Get position-specific stop/target from DB, or use defaults
+        db_pos = investor.positions_repo.get_open_position(symbol)
+        if db_pos:
+            target = db_pos.target_pct
+            stop = db_pos.stop_loss_pct
+        else:
+            target = default_target
+            stop = default_stop
+        
         console.print(f"  {symbol}: ${pos['market_value']:.2f} ([{pnl_style}]{pnl_pct:+.2f}%[/{pnl_style}])")
         
         if pnl_pct >= target:
-            console.print(f"    [green]🎯 PROFIT TARGET HIT![/green]")
-            investor.execute_sell(symbol, pos["qty"], test_mode=test)
+            console.print(f"    [green]🎯 PROFIT TARGET HIT! (+{target}%)[/green]")
+            if investor.execute_sell(symbol, pos["qty"], test_mode=test):
+                # Close position in DB
+                if db_pos and not test:
+                    investor.positions_repo.close_position(
+                        db_pos.id,
+                        pos["current_price"],
+                        "target_hit"
+                    )
         elif pnl_pct <= -stop:
-            console.print(f"    [red]🛑 STOP LOSS HIT![/red]")
-            investor.execute_sell(symbol, pos["qty"], test_mode=test)
+            console.print(f"    [red]🛑 STOP LOSS HIT! (-{stop}%)[/red]")
+            if investor.execute_sell(symbol, pos["qty"], test_mode=test):
+                # Close position in DB
+                if db_pos and not test:
+                    investor.positions_repo.close_position(
+                        db_pos.id,
+                        pos["current_price"],
+                        "stop_loss"
+                    )
 
 
 @ai_app.command()
@@ -725,6 +803,15 @@ def sell(
         if investor.execute_sell(sym, pos["qty"], test_mode=test):
             total_value += pos["market_value"]
             total_pnl += pos["pnl"]
+            # Close position in DB
+            if not test:
+                db_pos = investor.positions_repo.get_open_position(sym)
+                if db_pos:
+                    investor.positions_repo.close_position(
+                        db_pos.id,
+                        pos["current_price"],
+                        "manual_sell"
+                    )
     
     pnl_style = "green" if total_pnl >= 0 else "red"
     console.print(f"\n[bold]Total Value:[/bold] ${total_value:.2f}")
@@ -805,3 +892,73 @@ def analyze(
             console.print(f"    {pick['rationale'][:80]}...")
     else:
         console.print("\n[yellow]AI found no compelling opportunities right now.[/yellow]")
+
+
+@ai_app.command()
+def history(
+    limit: int = typer.Option(20, "--limit", "-n", help="Number of positions to show"),
+    show_open: bool = typer.Option(False, "--open", "-o", help="Show only open positions"),
+) -> None:
+    """Show AI trading history and performance."""
+    investor = get_investor()
+    
+    # Get positions
+    if show_open:
+        positions = investor.positions_repo.get_open_positions()
+        title = "Open AI Positions"
+    else:
+        positions = investor.positions_repo.get_all_positions(limit=limit)
+        title = f"AI Trading History (last {limit})"
+    
+    if not positions:
+        console.print("[dim]No AI trading history found.[/dim]")
+        raise typer.Exit(0)
+    
+    # Show positions table
+    table = Table(title=title)
+    table.add_column("Symbol", style="cyan")
+    table.add_column("Status")
+    table.add_column("Entry", justify="right")
+    table.add_column("Exit", justify="right")
+    table.add_column("Stop", justify="right")
+    table.add_column("Target", justify="right")
+    table.add_column("P/L", justify="right")
+    table.add_column("Date")
+    
+    for pos in positions:
+        status_style = {
+            "open": "yellow",
+            "closed_target": "green",
+            "closed_stop": "red",
+            "closed_manual": "blue",
+        }.get(pos.status, "white")
+        
+        pnl_str = ""
+        if pos.pnl is not None:
+            pnl_style = "green" if pos.pnl >= 0 else "red"
+            pnl_str = f"[{pnl_style}]${pos.pnl:.2f} ({pos.pnl_pct:+.1f}%)[/{pnl_style}]"
+        
+        table.add_row(
+            pos.symbol,
+            f"[{status_style}]{pos.status}[/{status_style}]",
+            f"${pos.entry_price:.2f}",
+            f"${pos.exit_price:.2f}" if pos.exit_price else "-",
+            f"-{pos.stop_loss_pct}%",
+            f"+{pos.target_pct}%",
+            pnl_str,
+            pos.entry_timestamp.strftime("%Y-%m-%d"),
+        )
+    
+    console.print(table)
+    
+    # Show summary
+    summary = investor.positions_repo.get_performance_summary()
+    console.print()
+    console.print(Panel.fit(
+        f"[bold]Total Positions:[/bold] {summary['total_positions']}\n"
+        f"[bold]Open:[/bold] {summary['open_positions']} | [bold]Closed:[/bold] {summary['closed_positions']}\n"
+        f"[bold]Win Rate:[/bold] {summary['win_rate']:.1f}% ({summary['winning_trades']}W / {summary['losing_trades']}L)\n"
+        f"[bold]Total P/L:[/bold] ${summary['total_pnl']:.2f}\n"
+        f"[bold]Avg P/L:[/bold] {summary['avg_pnl_pct']:.1f}%",
+        title="📊 Performance Summary",
+    ))
