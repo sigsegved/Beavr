@@ -1,5 +1,5 @@
 {
-  "last_update": "2026-02-05T07:30:43.295640",
+  "last_update": "2026-02-05T08:13:59.043673",
   "current_phase": "market_hours",
   "current_date": "2026-02-05",
   "trades_today": 0,
@@ -13,5 +13,6 @@
   "current_drawdown": 0.0,
   "consecutive_losses": 0,
   "trading_enabled": true,
-  "circuit_breaker_until": null
+  "circuit_breaker_until": null,
+  "last_research_run": "2026-02-05T11:08:17.486009-05:00"
 }

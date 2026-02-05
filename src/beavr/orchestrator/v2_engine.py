@@ -629,10 +629,23 @@ class V2AutonomousOrchestrator:
         """Return True if the system should focus on research."""
         return approved_theses == 0 and pending_dd == 0 and open_positions == 0
 
-    def _should_run_research(self, now: datetime, phase: OrchestratorPhase) -> bool:
-        """Determine whether a research cycle should run now."""
+    def _should_run_research(
+        self,
+        now: datetime,
+        phase: OrchestratorPhase,
+        research_mode: bool = False,
+    ) -> bool:
+        """Determine whether a research cycle should run now.
+        
+        If research_mode is True (no theses, no positions), run immediately
+        without waiting for the interval - no point sitting idle.
+        """
         if phase not in {OrchestratorPhase.POWER_HOUR, OrchestratorPhase.MARKET_HOURS}:
             return False
+
+        # When idle (nothing to do), research immediately
+        if research_mode:
+            return True
 
         last_run = self.state.last_research_run
         if last_run and last_run.tzinfo is None:
@@ -1208,7 +1221,7 @@ class V2AutonomousOrchestrator:
                         f"Trades Today: {self.state.trades_today}/{self.config.daily_trade_limit}"
                     )
 
-                    if self._should_run_research(now, current_phase):
+                    if self._should_run_research(now, current_phase, research_mode):
                         self._run_market_research_cycle(open_symbols, research_mode)
                     elif research_mode:
                         logger.info("🔬 Research mode idle - awaiting next research window")
@@ -1238,7 +1251,7 @@ class V2AutonomousOrchestrator:
                         f"Trades Today: {self.state.trades_today}/{self.config.daily_trade_limit}"
                     )
 
-                    if self._should_run_research(now, current_phase):
+                    if self._should_run_research(now, current_phase, research_mode):
                         self._run_market_research_cycle(open_symbols, research_mode)
                     elif research_mode:
                         logger.info("🔬 Research mode idle - awaiting next research window")

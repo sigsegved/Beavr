@@ -59,3 +59,15 @@ class TestV2OrchestratorResearch:
         """Research should not run outside market or power hour phases."""
         now = datetime(2026, 2, 5, 8, 0, tzinfo=ET)
         assert not orchestrator._should_run_research(now, OrchestratorPhase.PRE_MARKET)
+
+    def test_should_run_research_immediately_in_research_mode(
+        self, orchestrator: V2AutonomousOrchestrator
+    ) -> None:
+        """Research should run immediately when in research_mode, skipping interval."""
+        now = datetime(2026, 2, 5, 11, 0, tzinfo=ET)
+        # Set last research to just 1 minute ago (way under 15 min interval)
+        orchestrator.state.last_research_run = now - timedelta(seconds=60)
+        # Without research_mode, should NOT run
+        assert not orchestrator._should_run_research(now, OrchestratorPhase.MARKET_HOURS, research_mode=False)
+        # With research_mode=True, should run immediately
+        assert orchestrator._should_run_research(now, OrchestratorPhase.MARKET_HOURS, research_mode=True)
