@@ -535,8 +535,8 @@ class V2AutonomousOrchestrator:
         """
         Execute day trades during power hour (9:35-10:30 AM).
         
-        CRITICAL: We wait until 9:35 AM (5 min after open)
-        to let the opening range establish.
+        Continuous pipeline - can enter trades throughout power hour.
+        Only constraint: wait until 9:35 AM for opening range to establish.
         """
         logger.info("=" * 60)
         logger.info("⚡ POWER HOUR EXECUTION")
@@ -544,17 +544,21 @@ class V2AutonomousOrchestrator:
         
         now = datetime.now(ET)
         
-        # Check if we're in the entry window (9:35 - 9:45 AM)
+        # Only constraint: wait for opening range (first 5 min)
         entry_start = now.replace(hour=9, minute=35, second=0, microsecond=0)
-        entry_end = now.replace(hour=9, minute=45, second=0, microsecond=0)
+        power_hour_end = now.replace(
+            hour=self.config.power_hour_end_hour,
+            minute=self.config.power_hour_end_minute,
+            second=0, microsecond=0
+        )
         
         if now < entry_start:
             wait_seconds = (entry_start - now).total_seconds()
             logger.info(f"⏳ Waiting {wait_seconds/60:.1f} min for opening range (9:35 AM)")
             return
         
-        if now > entry_end:
-            logger.info("⏰ Entry window (9:35-9:45 AM) passed, monitoring only")
+        if now > power_hour_end:
+            logger.info("⏰ Power hour ended (10:30 AM) - switching to market hours mode")
             return
         
         if not self._check_circuit_breaker():
@@ -580,6 +584,42 @@ class V2AutonomousOrchestrator:
                 self._execute_trade(thesis, is_day_trade=True)
             except Exception as e:
                 logger.error(f"Error executing {thesis.symbol}: {e}")
+    
+    def _execute_swing_trades(self) -> None:
+        """
+        Execute swing trades during market hours.
+        
+        Continuous pipeline - can enter swing positions anytime during market hours.
+        This allows the system to react to market events throughout the day.
+        """
+        if not self._check_circuit_breaker():
+            return
+        
+        # Get approved swing trade theses (not day trades)
+        approved = self._get_approved_theses()
+        swing_trades = [
+            t for t in approved 
+            if t.trade_type != TradeType.DAY_TRADE
+            and t.symbol not in self.state.active_swing_trades  # Not already in
+        ]
+        
+        if not swing_trades:
+            return  # No need to log - this is continuous
+        
+        logger.info("=" * 40)
+        logger.info("📊 SWING TRADE EXECUTION")
+        logger.info("=" * 40)
+        logger.info(f"📋 {len(swing_trades)} approved swing trades to execute")
+        
+        for thesis in swing_trades:
+            if self.state.trades_today >= self.config.daily_trade_limit:
+                logger.info("Daily trade limit reached")
+                break
+            
+            try:
+                self._execute_trade(thesis, is_day_trade=False)
+            except Exception as e:
+                logger.error(f"Error executing swing trade {thesis.symbol}: {e}")
     
     def _execute_trade(self, thesis: TradeThesis, is_day_trade: bool = False) -> bool:
         """Execute a trade based on an approved thesis."""
@@ -833,6 +873,8 @@ class V2AutonomousOrchestrator:
                     time.sleep(self.config.power_hour_check_interval)
                     
                 elif current_phase == OrchestratorPhase.MARKET_HOURS:
+                    # Execute any pending swing trades
+                    self._execute_swing_trades()
                     # Monitor positions
                     self._monitor_positions()
                     time.sleep(self.config.position_check_interval)

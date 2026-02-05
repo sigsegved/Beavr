@@ -1,0 +1,17 @@
+{
+  "last_update": "2026-02-05T07:29:31.980567",
+  "current_phase": "power_hour",
+  "current_date": "2026-02-05",
+  "trades_today": 0,
+  "daily_pnl": "0",
+  "invested_today": false,
+  "pending_dd_candidates": [],
+  "dd_completed_tonight": [],
+  "active_day_trades": [],
+  "active_swing_trades": [],
+  "peak_portfolio_value": "0",
+  "current_drawdown": 0.0,
+  "consecutive_losses": 0,
+  "trading_enabled": true,
+  "circuit_breaker_until": null
+}
