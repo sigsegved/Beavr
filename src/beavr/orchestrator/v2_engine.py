@@ -21,13 +21,14 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
 from beavr.agents.base import AgentContext
 from beavr.models.dd_report import DDRecommendation
+from beavr.models.market_event import EventImportance, EventType, MarketEvent
 from beavr.models.thesis import ThesisStatus, TradeThesis, TradeType
 
 if TYPE_CHECKING:
@@ -92,6 +93,9 @@ class SystemState(BaseModel):
     trading_enabled: bool = True
     circuit_breaker_until: Optional[datetime] = None
 
+    # Research tracking
+    last_research_run: Optional[datetime] = None
+
 
 @dataclass
 class V2Config:
@@ -133,8 +137,14 @@ class V2Config:
     
     # Polling intervals (seconds)
     news_poll_interval: int = 900      # 15 minutes
+    market_research_interval: int = 900  # 15 minutes
     position_check_interval: int = 300  # 5 minutes
     power_hour_check_interval: int = 120  # 2 minutes
+
+    # Research scope
+    market_movers_limit: int = 10
+    news_limit: int = 25
+    max_research_symbols: int = 25
     
     # Paths
     state_file: str = "logs/ai_investor/v2_state.json"
@@ -202,6 +212,10 @@ class V2AutonomousOrchestrator:
         
         # Context builder (set externally)
         self._ctx_builder = None
+
+        # Lazy data utilities
+        self._market_screener = None
+        self._news_scanner = None
     
     def set_trading_client(self, trading_client, data_client) -> None:
         """Set the Alpaca trading and data clients."""
@@ -234,6 +248,7 @@ class V2AutonomousOrchestrator:
             self.state.invested_today = False
             self.state.active_day_trades = []
             self.state.dd_completed_tonight = []
+            self.state.last_research_run = None
     
     def _save_state(self) -> None:
         """Save state to disk."""
@@ -374,103 +389,398 @@ class V2AutonomousOrchestrator:
         except Exception as e:
             logger.error(f"Error getting pending DD candidates: {e}")
             return []
+
+    def _build_context(self, symbols: list[str]) -> AgentContext:
+        """Build agent context for the provided symbols."""
+        if self._ctx_builder:
+            return self._ctx_builder(symbols)
+
+        prices = {symbol: Decimal("0") for symbol in symbols}
+        return AgentContext(
+            current_date=date.today(),
+            timestamp=datetime.now(),
+            prices=prices,
+            bars={symbol: [] for symbol in symbols},
+            indicators={symbol: {} for symbol in symbols},
+            cash=Decimal("10000"),
+            positions={},
+            portfolio_value=Decimal("10000"),
+            current_drawdown=0.0,
+            peak_value=Decimal("10000"),
+            risk_budget=1.0,
+            events=[],
+        )
+
+    def _get_market_screener(self):
+        """Lazy-load the market screener."""
+        if self._market_screener is not None:
+            return self._market_screener
+
+        try:
+            from beavr.core.config import get_settings
+            from beavr.data.screener import MarketScreener
+
+            settings = get_settings()
+            self._market_screener = MarketScreener(
+                settings.alpaca_api_key,
+                settings.alpaca_api_secret,
+            )
+        except Exception as e:
+            logger.warning(f"Market screener unavailable: {e}")
+            self._market_screener = None
+
+        return self._market_screener
+
+    def _get_news_scanner(self):
+        """Lazy-load the news scanner."""
+        if self._news_scanner is not None:
+            return self._news_scanner
+
+        try:
+            from beavr.core.config import get_settings
+            from beavr.data.screener import NewsScanner
+
+            settings = get_settings()
+            self._news_scanner = NewsScanner(
+                settings.alpaca_api_key,
+                settings.alpaca_api_secret,
+            )
+        except Exception as e:
+            logger.warning(f"News scanner unavailable: {e}")
+            self._news_scanner = None
+
+        return self._news_scanner
+
+    def _fetch_market_mover_events(self) -> list[MarketEvent]:
+        """Fetch market mover symbols and convert to synthetic events."""
+        screener = self._get_market_screener()
+        if not screener:
+            return []
+
+        try:
+            movers = screener.get_market_movers(top_n=self.config.market_movers_limit)
+        except Exception as e:
+            logger.warning(f"Market mover fetch failed: {e}")
+            return []
+
+        events: list[MarketEvent] = []
+
+        for mover in movers.top_gainers:
+            events.append(
+                MarketEvent(
+                    event_type=EventType.NEWS_CATALYST,
+                    symbol=mover.symbol,
+                    headline=f"Top gainer: {mover.symbol}",
+                    summary=f"{mover.symbol} up {mover.percent_change:+.1f}% as a top gainer",
+                    source="market_movers",
+                    timestamp=datetime.now(),
+                    importance=EventImportance.MEDIUM,
+                )
+            )
+
+        for mover in movers.top_losers:
+            events.append(
+                MarketEvent(
+                    event_type=EventType.NEWS_CATALYST,
+                    symbol=mover.symbol,
+                    headline=f"Top loser: {mover.symbol}",
+                    summary=f"{mover.symbol} down {mover.percent_change:+.1f}% as a top loser",
+                    source="market_movers",
+                    timestamp=datetime.now(),
+                    importance=EventImportance.MEDIUM,
+                )
+            )
+
+        for mover in movers.most_active:
+            events.append(
+                MarketEvent(
+                    event_type=EventType.OTHER,
+                    symbol=mover.symbol,
+                    headline=f"Most active: {mover.symbol}",
+                    summary=f"{mover.symbol} is among the most active by volume",
+                    source="market_movers",
+                    timestamp=datetime.now(),
+                    importance=EventImportance.MEDIUM,
+                )
+            )
+
+        return events
+
+    def _build_research_universe(
+        self,
+        mover_symbols: list[str],
+        open_positions: Optional[list[str]] = None,
+    ) -> list[str]:
+        """Build the symbol universe for research."""
+        symbols: set[str] = set(mover_symbols)
+
+        if open_positions:
+            symbols.update(open_positions)
+
+        for thesis in self._get_approved_theses():
+            symbols.add(thesis.symbol)
+
+        for thesis in self._get_pending_dd_candidates():
+            symbols.add(thesis.symbol)
+
+        limited = list(symbols)[: self.config.max_research_symbols]
+        return limited
+
+    def _fetch_news_items(self, symbols: list[str]) -> list[dict[str, Any]]:
+        """Fetch raw news items for the provided symbols."""
+        scanner = self._get_news_scanner()
+        if not scanner:
+            return []
+
+        try:
+            if symbols:
+                return scanner.get_news(symbols=symbols, limit=self.config.news_limit)
+            return scanner.get_news(limit=self.config.news_limit)
+        except Exception as e:
+            logger.warning(f"News fetch failed: {e}")
+            return []
+
+    def _classify_news_events(self, news_items: list[dict[str, Any]]) -> list[MarketEvent]:
+        """Classify raw news items into MarketEvent entries."""
+        if not self.news_monitor or not news_items:
+            return []
+
+        try:
+            return self.news_monitor.monitor_cycle(news_items)
+        except Exception as e:
+            logger.warning(f"News classification failed: {e}")
+            return []
+
+    def _dedupe_events(self, events: list[MarketEvent]) -> list[MarketEvent]:
+        """De-duplicate events by ID."""
+        unique: dict[str, MarketEvent] = {}
+        for event in events:
+            unique[event.id] = event
+        return list(unique.values())
+
+    def _find_existing_thesis_id(self, symbol: str, catalyst: str) -> Optional[str]:
+        """Return an existing thesis ID if a similar thesis already exists."""
+        if not self.thesis_repo:
+            return None
+
+        try:
+            for thesis in self.thesis_repo.get_by_symbol(symbol):
+                if (
+                    thesis.status in {ThesisStatus.DRAFT, ThesisStatus.ACTIVE, ThesisStatus.EXECUTED}
+                    and thesis.catalyst == catalyst
+                ):
+                    return thesis.id
+        except Exception as e:
+            logger.warning(f"Failed to check existing theses for {symbol}: {e}")
+
+        return None
+
+    def _generate_theses_from_events(self, events: list[MarketEvent]) -> list[TradeThesis]:
+        """Generate theses from the provided market events."""
+        if not self.thesis_generator:
+            logger.info("Thesis generator not configured")
+            return []
+
+        event_symbols = sorted({event.symbol for event in events if event.symbol})
+        if not event_symbols:
+            return []
+
+        ctx = self._build_context(event_symbols)
+        created: list[TradeThesis] = []
+
+        for event in events:
+            if not event.symbol:
+                if self.events_repo:
+                    self.events_repo.mark_processed(event.id)
+                continue
+
+            existing_id = self._find_existing_thesis_id(event.symbol, event.summary or event.headline)
+            if existing_id:
+                if self.events_repo:
+                    self.events_repo.mark_processed(event.id, existing_id)
+                continue
+
+            thesis = self.thesis_generator.generate_thesis_from_event(event, ctx)
+            if not thesis:
+                if self.events_repo:
+                    self.events_repo.mark_processed(event.id)
+                continue
+
+            thesis.status = ThesisStatus.ACTIVE
+
+            if self.thesis_repo:
+                try:
+                    self.thesis_repo.create(thesis)
+                except Exception as e:
+                    logger.warning(f"Failed to save thesis for {thesis.symbol}: {e}")
+            created.append(thesis)
+
+            if self.events_repo:
+                self.events_repo.mark_processed(event.id, thesis.id)
+
+        return created
+
+    def _is_research_mode(
+        self,
+        approved_theses: int,
+        pending_dd: int,
+        open_positions: int,
+    ) -> bool:
+        """Return True if the system should focus on research."""
+        return approved_theses == 0 and pending_dd == 0 and open_positions == 0
+
+    def _should_run_research(self, now: datetime, phase: OrchestratorPhase) -> bool:
+        """Determine whether a research cycle should run now."""
+        if phase not in {OrchestratorPhase.POWER_HOUR, OrchestratorPhase.MARKET_HOURS}:
+            return False
+
+        last_run = self.state.last_research_run
+        if last_run and last_run.tzinfo is None:
+            last_run = last_run.replace(tzinfo=ET)
+
+        if not last_run:
+            return True
+
+        elapsed = (now - last_run).total_seconds()
+        return elapsed >= self.config.market_research_interval
+
+    def _run_market_research_cycle(
+        self,
+        open_positions: list[str],
+        research_mode: bool,
+    ) -> None:
+        """Run the continuous research pipeline during market hours."""
+        self.state.last_research_run = datetime.now(ET)
+        self._save_state()
+
+        logger.info("=" * 60)
+        logger.info("🔬 MARKET HOURS RESEARCH CYCLE")
+        logger.info("=" * 60)
+
+        mover_events = self._fetch_market_mover_events()
+        mover_symbols = [event.symbol for event in mover_events if event.symbol]
+        if mover_symbols:
+            logger.info(f"📈 Market movers: {mover_symbols[:10]}")
+        elif research_mode:
+            logger.info("📉 No movers available; research mode remains active")
+
+        research_universe = self._build_research_universe(mover_symbols, open_positions)
+        if not research_universe:
+            logger.info("No research symbols available")
+            return
+
+        news_items = self._fetch_news_items(research_universe)
+        news_events = self._classify_news_events(news_items)
+
+        if self.events_repo and news_events:
+            for event in news_events:
+                try:
+                    self.events_repo.create(event)
+                except Exception as e:
+                    logger.warning(f"Failed to store event {event.id}: {e}")
+
+        if self.events_repo:
+            try:
+                unprocessed_events = self.events_repo.get_unprocessed()
+            except Exception as e:
+                logger.warning(f"Failed to load unprocessed events: {e}")
+                unprocessed_events = []
+            events_to_process = self._dedupe_events(unprocessed_events + mover_events)
+        else:
+            events_to_process = self._dedupe_events(news_events + mover_events)
+
+        if events_to_process:
+            logger.info(f"📚 Processing {len(events_to_process)} research events")
+        elif research_mode:
+            logger.info("📚 Research cycle found no new events")
+
+        created_theses = self._generate_theses_from_events(events_to_process)
+        if created_theses:
+            logger.info(f"✅ Created {len(created_theses)} new theses")
+
+        pending_dd = self._get_pending_dd_candidates()
+        if pending_dd:
+            self._run_dd_cycle(pending_dd, "🔬 MARKET HOURS DD CYCLE")
+        elif research_mode:
+            logger.info("🔬 No pending DD candidates in research mode")
     
+    def _run_dd_cycle(self, candidates: list[TradeThesis], label: str) -> None:
+        """Run a DD cycle for the provided candidates."""
+        logger.info("=" * 60)
+        logger.info(label)
+        logger.info("=" * 60)
+
+        if not self.dd_agent or not self.thesis_repo:
+            logger.warning("DD agent or thesis repo not configured")
+            return
+
+        if not candidates:
+            logger.info("No pending DD candidates")
+            return
+
+        logger.info(f"📋 {len(candidates)} candidates for DD review")
+
+        for thesis in candidates:
+            if thesis.symbol in self.state.dd_completed_tonight:
+                logger.info(f"  Skipping {thesis.symbol} - already DD'd today")
+                continue
+
+            logger.info(f"\n🔬 Researching {thesis.symbol}...")
+            logger.info(f"   Trade Type: {thesis.trade_type.value}")
+            logger.info(f"   Catalyst: {thesis.catalyst[:80]}...")
+
+            try:
+                ctx = self._build_context([thesis.symbol])
+
+                dd_report = self.dd_agent.analyze_thesis(thesis, ctx)
+
+                if dd_report:
+                    if self.dd_repo:
+                        self.dd_repo.create(dd_report)
+
+                    if dd_report.recommendation == DDRecommendation.APPROVE:
+                        logger.info(f"   ✅ APPROVED (confidence: {dd_report.confidence:.0%})")
+                        thesis.dd_approved = True
+                        thesis.dd_report_id = dd_report.id
+                        thesis.status = ThesisStatus.ACTIVE
+
+                        thesis.entry_price_target = dd_report.recommended_entry
+                        thesis.profit_target = dd_report.recommended_target
+                        thesis.stop_loss = dd_report.recommended_stop
+
+                    elif dd_report.recommendation == DDRecommendation.CONDITIONAL:
+                        logger.info(f"   ⚠️  CONDITIONAL (confidence: {dd_report.confidence:.0%})")
+                        thesis.dd_report_id = dd_report.id
+
+                    else:
+                        logger.info(f"   ❌ REJECTED: {dd_report.rejection_reason}")
+                        thesis.status = ThesisStatus.INVALIDATED
+                        thesis.dd_report_id = dd_report.id
+
+                    self.thesis_repo.update(thesis)
+
+                self.state.dd_completed_tonight.append(thesis.symbol)
+
+            except Exception as e:
+                logger.error(f"   Error running DD for {thesis.symbol}: {e}")
+
+            time.sleep(2)
+
+        self._save_state()
+        logger.info("\n✅ DD cycle complete")
+
     def _run_overnight_dd_cycle(self) -> None:
         """
         Run the overnight DD research cycle.
-        
+
         This is the deep research phase where we:
         1. Get pending theses that need DD
         2. Run DD agent on each
         3. Save DD reports
         4. Mark theses as approved/rejected
         """
-        logger.info("=" * 60)
-        logger.info("🌙 OVERNIGHT DD RESEARCH CYCLE")
-        logger.info("=" * 60)
-        
-        if not self.dd_agent or not self.thesis_repo:
-            logger.warning("DD agent or thesis repo not configured")
-            return
-        
         candidates = self._get_pending_dd_candidates()
-        if not candidates:
-            logger.info("No pending DD candidates")
-            return
-        
-        logger.info(f"📋 {len(candidates)} candidates for DD review")
-        
-        for thesis in candidates:
-            if thesis.symbol in self.state.dd_completed_tonight:
-                logger.info(f"  Skipping {thesis.symbol} - already DD'd tonight")
-                continue
-            
-            logger.info(f"\n🔬 Researching {thesis.symbol}...")
-            logger.info(f"   Trade Type: {thesis.trade_type.value}")
-            logger.info(f"   Catalyst: {thesis.catalyst[:80]}...")
-            
-            try:
-                # Build context for the symbol
-                if self._ctx_builder:
-                    ctx = self._ctx_builder([thesis.symbol])
-                else:
-                    ctx = AgentContext(
-                        current_date=date.today(),
-                        timestamp=datetime.now(),
-                        prices={thesis.symbol: thesis.entry_price_target},
-                        bars={},
-                        indicators={},
-                        cash=Decimal("10000"),
-                        positions={},
-                        portfolio_value=Decimal("10000"),
-                        current_drawdown=0.0,
-                        peak_value=Decimal("10000"),
-                        risk_budget=1.0,
-                    )
-                
-                # Run DD analysis
-                dd_report = self.dd_agent.analyze_thesis(thesis, ctx)
-                
-                if dd_report:
-                    # Save DD report
-                    if self.dd_repo:
-                        self.dd_repo.create(dd_report)
-                    
-                    # Update thesis based on DD result
-                    if dd_report.recommendation == DDRecommendation.APPROVE:
-                        logger.info(f"   ✅ APPROVED (confidence: {dd_report.confidence:.0%})")
-                        thesis.dd_approved = True
-                        thesis.dd_report_id = dd_report.id
-                        thesis.status = ThesisStatus.ACTIVE
-                        
-                        # Update targets from DD
-                        thesis.entry_price_target = dd_report.recommended_entry
-                        thesis.profit_target = dd_report.recommended_target
-                        thesis.stop_loss = dd_report.recommended_stop
-                        
-                    elif dd_report.recommendation == DDRecommendation.CONDITIONAL:
-                        logger.info(f"   ⚠️  CONDITIONAL (confidence: {dd_report.confidence:.0%})")
-                        thesis.dd_report_id = dd_report.id
-                        # Keep as draft, needs conditions met
-                        
-                    else:
-                        logger.info(f"   ❌ REJECTED: {dd_report.rejection_reason}")
-                        thesis.status = ThesisStatus.INVALIDATED
-                        thesis.dd_report_id = dd_report.id
-                    
-                    # Save updated thesis
-                    self.thesis_repo.update(thesis)
-                    
-                self.state.dd_completed_tonight.append(thesis.symbol)
-                
-            except Exception as e:
-                logger.error(f"   Error running DD for {thesis.symbol}: {e}")
-            
-            # Rate limit between analyses
-            time.sleep(2)
-        
-        self._save_state()
-        logger.info("\n✅ Overnight DD cycle complete")
+        self._run_dd_cycle(candidates, "🌙 OVERNIGHT DD RESEARCH CYCLE")
     
     def _run_pre_market_scan(self) -> list[str]:
         """
@@ -880,11 +1190,23 @@ class V2AutonomousOrchestrator:
                     approved = self._get_approved_theses()
                     day_trades = [t for t in approved if t.trade_type == TradeType.DAY_TRADE]
                     positions = self._trading_client.get_all_positions() if self._trading_client else []
+                    open_symbols = [pos.symbol for pos in positions] if positions else []
+                    pending_dd = self._get_pending_dd_candidates()
+                    research_mode = self._is_research_mode(
+                        approved_theses=len(approved),
+                        pending_dd=len(pending_dd),
+                        open_positions=len(positions),
+                    )
                     logger.info(
                         f"⚡ Power Hour | Day Trade Theses: {len(day_trades)} | "
                         f"Open Positions: {len(positions)} | "
                         f"Trades Today: {self.state.trades_today}/{self.config.daily_trade_limit}"
                     )
+
+                    if self._should_run_research(now, current_phase):
+                        self._run_market_research_cycle(open_symbols, research_mode)
+                    elif research_mode:
+                        logger.info("🔬 Research mode idle - awaiting next research window")
                     
                     # Execute day trades
                     self._execute_power_hour(candidates_today)
@@ -898,11 +1220,23 @@ class V2AutonomousOrchestrator:
                     # Heartbeat log
                     approved = self._get_approved_theses()
                     positions = self._trading_client.get_all_positions() if self._trading_client else []
+                    open_symbols = [pos.symbol for pos in positions] if positions else []
+                    pending_dd = self._get_pending_dd_candidates()
+                    research_mode = self._is_research_mode(
+                        approved_theses=len(approved),
+                        pending_dd=len(pending_dd),
+                        open_positions=len(positions),
+                    )
                     logger.info(
                         f"📊 Market Hours | Approved Theses: {len(approved)} | "
                         f"Open Positions: {len(positions)} | "
                         f"Trades Today: {self.state.trades_today}/{self.config.daily_trade_limit}"
                     )
+
+                    if self._should_run_research(now, current_phase):
+                        self._run_market_research_cycle(open_symbols, research_mode)
+                    elif research_mode:
+                        logger.info("🔬 Research mode idle - awaiting next research window")
                     
                     # Execute any pending swing trades
                     self._execute_swing_trades()

@@ -1802,6 +1802,7 @@ def auto_v2(
     day_trade_stop: float = typer.Option(3.0, "--dt-stop", help="Day trade stop loss %"),
     daily_limit: int = typer.Option(5, "--daily-limit", "-d", help="Maximum trades per day"),
     capital_pct: float = typer.Option(80.0, "--capital", "-c", help="% of portfolio to use"),
+    research_interval: int = typer.Option(15, "--research-interval", help="Research cycle interval (minutes)"),
     test: bool = typer.Option(False, "--test", help="Test mode (no real trades)"),
     once: bool = typer.Option(False, "--once", help="Run one cycle then exit"),
 ) -> None:
@@ -1855,6 +1856,7 @@ def auto_v2(
     logger.info(f"Day Trade: +{day_trade_target}% / -{day_trade_stop}%")
     logger.info(f"Daily Trade Limit: {daily_limit}")
     logger.info(f"Capital Allocation: {capital_pct}%")
+    logger.info(f"Research Interval: {research_interval} minutes")
     logger.info(f"Mode: {'TEST' if test else 'LIVE'}")
     logger.info(f"Log file: {log_file}")
     logger.info("=" * 60)
@@ -1866,6 +1868,7 @@ def auto_v2(
         f"Day Trade: +{day_trade_target}% / -{day_trade_stop}% (R/R {day_trade_target/day_trade_stop:.1f}:1)\n"
         f"Daily Limit: {daily_limit} trades\n"
         f"Capital: {capital_pct}%\n\n"
+        f"Research Interval: {research_interval} min\n"
         f"Mode: {'[yellow]TEST[/yellow]' if test else '[green]LIVE[/green]'}\n"
         f"Log: {log_file}",
         title="V2 Architecture",
@@ -1879,6 +1882,8 @@ def auto_v2(
         daily_trade_limit=daily_limit,
         day_trade_target_pct=day_trade_target,
         day_trade_stop_pct=day_trade_stop,
+        news_poll_interval=research_interval * 60,
+        market_research_interval=research_interval * 60,
         state_file=str(log_dir / "v2_state.json"),
         log_dir=str(log_dir),
     )
