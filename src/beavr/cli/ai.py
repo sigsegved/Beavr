@@ -1355,7 +1355,27 @@ def _build_agent_context_for_symbols(investor: AIInvestor, symbols: list[str]) -
 
     for symbol in symbols:
         symbol_u = symbol.upper()
-        df = investor.fetcher.get_bars(symbol_u, start, end)
+        df = None
+
+        # Retry with exponential backoff for connection errors
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                df = investor.fetcher.get_bars(symbol_u, start, end)
+                break  # Success
+            except (ConnectionError, ConnectionResetError, OSError) as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # 1s, 2s, 4s
+                    logger.warning(f"Connection error for {symbol_u}, retrying in {wait_time}s: {e}")
+                    time.sleep(wait_time)
+                else:
+                    logger.warning(f"Failed to fetch bars for {symbol_u} after {max_retries} attempts: {e}")
+                    df = None
+            except Exception as e:
+                # Non-connection errors, don't retry
+                logger.warning(f"Error fetching bars for {symbol_u}: {e}")
+                df = None
+                break
 
         if df is None or df.empty:
             bars[symbol_u] = []

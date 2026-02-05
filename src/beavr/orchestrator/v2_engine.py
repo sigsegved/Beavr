@@ -672,6 +672,7 @@ class V2AutonomousOrchestrator:
         news_items = self._fetch_news_items(research_universe)
         news_events = self._classify_news_events(news_items)
 
+        # Store news events (NOT mover events - those are just for universe building)
         if self.events_repo and news_events:
             for event in news_events:
                 try:
@@ -679,20 +680,24 @@ class V2AutonomousOrchestrator:
                 except Exception as e:
                     logger.warning(f"Failed to store event {event.id}: {e}")
 
+        # Only process REAL news events for thesis generation
+        # Mover data is ONLY used to build the research universe (which symbols to scan)
+        # We never trade based on movers alone - only on news/events with catalysts
         if self.events_repo:
             try:
                 unprocessed_events = self.events_repo.get_unprocessed()
             except Exception as e:
                 logger.warning(f"Failed to load unprocessed events: {e}")
                 unprocessed_events = []
-            events_to_process = self._dedupe_events(unprocessed_events + mover_events)
+            events_to_process = self._dedupe_events(unprocessed_events)
         else:
-            events_to_process = self._dedupe_events(news_events + mover_events)
+            # Only news events, NOT mover events
+            events_to_process = self._dedupe_events(news_events)
 
         if events_to_process:
-            logger.info(f"📚 Processing {len(events_to_process)} research events")
+            logger.info(f"📚 Processing {len(events_to_process)} NEWS events for thesis generation")
         elif research_mode:
-            logger.info("📚 Research cycle found no new events")
+            logger.info("📚 No actionable news events found (movers are for universe only)")
 
         created_theses = self._generate_theses_from_events(events_to_process)
         if created_theses:
