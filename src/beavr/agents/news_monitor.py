@@ -253,11 +253,13 @@ Respond with your classification in JSON format."""
             
             # Skip non-actionable events
             if not classification.is_actionable:
+                logger.info(f"  ❌ Not actionable: {headline[:60]}...")
                 return None
             
             # Skip low importance events based on threshold
             importance = EventImportance(classification.importance.lower())
             if self._below_threshold(importance):
+                logger.info(f"  ⬇️ Below threshold ({importance.value}): {headline[:60]}...")
                 return None
             
             # Convert to EventType enum

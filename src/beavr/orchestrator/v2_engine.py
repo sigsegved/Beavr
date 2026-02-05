@@ -562,11 +562,22 @@ class V2AutonomousOrchestrator:
 
     def _classify_news_events(self, news_items: list[dict[str, Any]]) -> list[MarketEvent]:
         """Classify raw news items into MarketEvent entries."""
-        if not self.news_monitor or not news_items:
+        if not self.news_monitor:
+            logger.warning("News monitor not configured - skipping classification")
+            return []
+        if not news_items:
             return []
 
+        # Log raw news for debugging
+        for item in news_items[:3]:  # Log first 3
+            headline = item.get("headline", item.get("title", ""))[:80]
+            symbols = item.get("symbols", [])
+            logger.info(f"  📰 Raw news: {headline}... [{', '.join(symbols[:3]) if symbols else 'no symbols'}]")
+
         try:
-            return self.news_monitor.monitor_cycle(news_items)
+            events = self.news_monitor.monitor_cycle(news_items)
+            logger.info(f"  ✅ Classified {len(events)} actionable events from {len(news_items)} news items")
+            return events
         except Exception as e:
             logger.warning(f"News classification failed: {e}")
             return []
