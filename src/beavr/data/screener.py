@@ -197,15 +197,15 @@ class NewsScanner:
             raise ImportError("alpaca-py required for news scanner") from err
     
     def get_news(
-        self, 
-        symbols: Optional[list[str]] = None,
+        self,
+        symbols: Optional[list[str] | str] = None,
         limit: int = 10,
     ) -> list[dict[str, Any]]:
         """
         Get recent news for symbols.
         
         Args:
-            symbols: Symbols to get news for (None for general market)
+            symbols: Symbols to get news for (list or comma-separated string)
             limit: Max news items to return
             
         Returns:
@@ -216,7 +216,10 @@ class NewsScanner:
         try:
             request_params: dict[str, Any] = {"limit": limit}
             if symbols:
-                request_params["symbols"] = symbols  # Pass as list, not string
+                if isinstance(symbols, list):
+                    request_params["symbols"] = ",".join(symbols)
+                else:
+                    request_params["symbols"] = symbols
             
             response = self._client.get_news(self._NewsRequest(**request_params))
             
