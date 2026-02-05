@@ -796,7 +796,7 @@ class V2AutonomousOrchestrator:
         logger.info(f"State: {self.state.model_dump()}")
         
         candidates_today = []
-        last_news_check = datetime.min
+        last_news_check = datetime.min.replace(tzinfo=ET)
         
         while self._running and not self._shutdown_requested:
             try:
