@@ -851,38 +851,74 @@ class V2AutonomousOrchestrator:
                 
                 # Run phase-specific logic
                 if current_phase == OrchestratorPhase.OVERNIGHT_DD:
+                    # Heartbeat log
+                    pending = self._get_pending_dd_candidates()
+                    logger.info(f"🌙 Overnight DD | Pending Candidates: {len(pending)}")
+                    
                     # Deep research overnight
                     self._run_overnight_dd_cycle()
                     # Check news periodically
                     if (now - last_news_check).total_seconds() > self.config.news_poll_interval:
                         # TODO: Run news monitor
                         last_news_check = now
+                    logger.info("💤 Sleeping 300s...")
                     time.sleep(300)  # 5 min between DD cycles
                     
                 elif current_phase == OrchestratorPhase.PRE_MARKET:
+                    # Heartbeat log
+                    approved = self._get_approved_theses()
+                    logger.info(f"🌅 Pre-Market | Approved Theses: {len(approved)} | Candidates: {len(candidates_today)}")
+                    
                     # Run morning scan once
                     if not candidates_today:
                         candidates_today = self._run_pre_market_scan()
+                    logger.info("💤 Sleeping 300s...")
                     time.sleep(300)  # Check every 5 min
                     
                 elif current_phase == OrchestratorPhase.POWER_HOUR:
+                    # Heartbeat log
+                    approved = self._get_approved_theses()
+                    day_trades = [t for t in approved if t.trade_type == TradeType.DAY_TRADE]
+                    positions = self._trading_client.get_all_positions() if self._trading_client else []
+                    logger.info(
+                        f"⚡ Power Hour | Day Trade Theses: {len(day_trades)} | "
+                        f"Open Positions: {len(positions)} | "
+                        f"Trades Today: {self.state.trades_today}/{self.config.daily_trade_limit}"
+                    )
+                    
                     # Execute day trades
                     self._execute_power_hour(candidates_today)
                     # Monitor positions frequently
                     self._monitor_positions()
+                    
+                    logger.info(f"💤 Sleeping {self.config.power_hour_check_interval}s...")
                     time.sleep(self.config.power_hour_check_interval)
                     
                 elif current_phase == OrchestratorPhase.MARKET_HOURS:
+                    # Heartbeat log
+                    approved = self._get_approved_theses()
+                    positions = self._trading_client.get_all_positions() if self._trading_client else []
+                    logger.info(
+                        f"📊 Market Hours | Approved Theses: {len(approved)} | "
+                        f"Open Positions: {len(positions)} | "
+                        f"Trades Today: {self.state.trades_today}/{self.config.daily_trade_limit}"
+                    )
+                    
                     # Execute any pending swing trades
                     self._execute_swing_trades()
                     # Monitor positions
                     self._monitor_positions()
+                    
+                    logger.info(f"💤 Sleeping {self.config.position_check_interval}s until next check...")
                     time.sleep(self.config.position_check_interval)
                     
                 else:  # AFTER_HOURS
+                    # Heartbeat log
+                    logger.info("🌆 After Hours | Preparing for overnight research...")
                     # Reset for next day
                     candidates_today = []
                     # Learn from today's trades (TODO)
+                    logger.info("💤 Sleeping 300s...")
                     time.sleep(300)
                 
             except KeyboardInterrupt:
