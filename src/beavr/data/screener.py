@@ -47,10 +47,10 @@ class MarketScreener:
         """Initialize screener with Alpaca credentials."""
         try:
             from alpaca.data import (
-                ScreenerClient,
                 MarketMoversRequest,
-                MostActivesRequest,
                 MostActivesBy,
+                MostActivesRequest,
+                ScreenerClient,
             )
             
             self._client = ScreenerClient(api_key, api_secret)
@@ -58,8 +58,8 @@ class MarketScreener:
             self._MostActivesRequest = MostActivesRequest
             self._MostActivesBy = MostActivesBy
             
-        except ImportError:
-            raise ImportError("alpaca-py required for screener")
+        except ImportError as err:
+            raise ImportError("alpaca-py required for screener") from err
     
     def get_market_movers(self, top_n: int = 10) -> MarketScreenerResult:
         """
@@ -193,8 +193,8 @@ class NewsScanner:
             self._client = NewsClient(api_key, api_secret)
             self._NewsRequest = NewsRequest
             
-        except ImportError:
-            raise ImportError("alpaca-py required for news scanner")
+        except ImportError as err:
+            raise ImportError("alpaca-py required for news scanner") from err
     
     def get_news(
         self, 

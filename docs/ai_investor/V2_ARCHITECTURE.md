@@ -54,7 +54,7 @@ Specific goals:
 
 ### 2.1 System Topology
 
-The v2 architecture introduces a research pipeline that operates independently of market hours, feeding into a trade execution system that operates during market hours.
+The v2 architecture introduces a research pipeline that operates independently of market hours, feeding into a trade execution system that operates during market hours. Critically, the **Due Diligence Agent runs during non-market hours** to allow for deep research without time pressure.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
@@ -65,38 +65,49 @@ The v2 architecture introduces a research pipeline that operates independently o
 │  │                     CONTINUOUS RESEARCH PIPELINE                       │  │
 │  │                     (Runs 24/7 - Market Hours Agnostic)                │  │
 │  │                                                                        │  │
-│  │   ┌──────────────┐    ┌──────────────┐    ┌──────────────┐            │  │
-│  │   │    News      │    │   Thesis     │    │   Watchlist  │            │  │
-│  │   │   Monitor    │───▶│   Generator  │───▶│   Manager    │            │  │
-│  │   │              │    │              │    │              │            │  │
-│  │   │  Earnings,   │    │  Formulate   │    │  Rank and    │            │  │
-│  │   │  Filings,    │    │  hypotheses  │    │  prioritize  │            │  │
-│  │   │  Macro data  │    │  about moves │    │  candidates  │            │  │
-│  │   └──────────────┘    └──────────────┘    └──────────────┘            │  │
+│  │   ┌──────────────┐    ┌──────────────┐    ┌──────────────┐             │  │
+│  │   │    News      │    │   Thesis     │    │   Watchlist  │             │  │
+│  │   │   Monitor    │───▶│   Generator  │───▶│   Manager    │             │  │
+│  │   │              │    │              │    │              │             │  │
+│  │   │  Earnings,   │    │  Formulate   │    │  Rank and    │             │  │
+│  │   │  Filings,    │    │  hypotheses  │    │  prioritize  │             │  │
+│  │   │  Macro data  │    │  about moves │    │  candidates  │             │  │
+│  │   └──────────────┘    └──────────────┘    └──────────────┘             │  │
 │  │                                                    │                   │  │
-│  └────────────────────────────────────────────────────┼───────────────────┘  │
-│                                                       │                      │
-│                                                       ▼                      │
+│  │                                                    ▼                   │  │
+│  │                                           ┌──────────────┐             │  │
+│  │                                           │     Due      │             │  │
+│  │                                           │  Diligence   │             │  │
+│  │                                           │    Agent     │             │  │
+│  │                                           │              │             │  │
+│  │                                           │ Deep research│             │  │
+│  │                                           │ overnight    │             │  │
+│  │                                           └──────┬───────┘             │  │
+│  │                                                  │                     │  │
+│  └──────────────────────────────────────────────────┼─────────────────────┘  │
+│                                                     │                        │
+│                                                     ▼                        │
 │                                            ┌──────────────────┐              │
 │                                            │   THESIS STORE   │              │
+│                                            │   + DD REPORTS   │              │
 │                                            │                  │              │
-│                                            │  Active theses   │              │
-│                                            │  with catalysts, │              │
-│                                            │  targets, dates  │              │
+│                                            │  Approved theses │              │
+│                                            │  with DD reports │              │
+│                                            │  ready to trade  │              │
 │                                            └────────┬─────────┘              │
 │                                                     │                        │
 │  ┌──────────────────────────────────────────────────┼─────────────────────┐  │
 │  │                    MARKET HOURS EXECUTION                   │          │  │
-│  │                    (Runs During Trading Hours)              │          │  │
+│  │                    (9:30 AM - 4:00 PM ET)                   │          │  │
 │  │                                                             ▼          │  │
-│  │   ┌──────────────┐    ┌──────────────┐    ┌──────────────────────┐    │  │
-│  │   │   Morning    │    │     Due      │    │      Trade           │    │  │
-│  │   │   Scanner    │───▶│  Diligence   │───▶│    Execution         │    │  │
-│  │   │              │    │    Agent     │    │                      │    │  │
-│  │   │  Pre-market  │    │              │    │  Position sizing,    │    │  │
-│  │   │  gaps, volume│    │  Deep dive   │    │  order placement,    │    │  │
-│  │   │  surges      │    │  on finalists│    │  thesis attachment   │    │  │
-│  │   └──────────────┘    └──────────────┘    └──────────────────────┘    │  │
+│  │   ┌──────────────┐    ┌──────────────┐    ┌──────────────────────┐     │  │
+│  │   │   Morning    │    │   Opening    │    │      Trade           │     │  │
+│  │   │   Scanner    │───▶│   Range      │───▶│    Execution         │     │  │
+│  │   │              │    │   Analyzer   │    │                      │     │  │
+│  │   │  Pre-market  │    │              │    │  Position sizing,    │     │  │
+│  │   │  gaps, volume│    │  Wait 5 mins │    │  order placement,    │     │  │
+│  │   │  surges      │    │  assess move │    │  thesis attachment   │     │  │
+│  │   └──────────────┘    └──────────────┘    └──────────────────────┘     │  │
 │  │                                                                        │  │
 │  └────────────────────────────────────────────────────────────────────────┘  │
 │                                                                              │
@@ -104,13 +115,13 @@ The v2 architecture introduces a research pipeline that operates independently o
 │  │                      POSITION MANAGEMENT                               │  │
 │  │                      (Continuous During Market)                        │  │
 │  │                                                                        │  │
-│  │   ┌──────────────┐    ┌──────────────┐    ┌──────────────┐            │  │
-│  │   │   Position   │    │    Thesis    │    │    Exit      │            │  │
-│  │   │   Monitor    │───▶│   Validator  │───▶│   Executor   │            │  │
-│  │   │              │    │              │    │              │            │  │
-│  │   │  P/L, dates, │    │  Is thesis   │    │  Stop, target│            │  │
-│  │   │  catalysts   │    │  still valid?│    │  or scheduled│            │  │
-│  │   └──────────────┘    └──────────────┘    └──────────────┘            │  │
+│  │   ┌──────────────┐    ┌──────────────┐    ┌──────────────┐             │  │
+│  │   │   Position   │    │    Thesis    │    │    Exit      │             │  │
+│  │   │   Monitor    │───▶│   Validator  │───▶│   Executor   │             │  │
+│  │   │              │    │              │    │              │             │  │
+│  │   │  P/L, dates, │    │  Is thesis   │    │  Stop, target│             │  │
+│  │   │  catalysts   │    │  still valid?│    │  or scheduled│             │  │
+│  │   └──────────────┘    └──────────────┘    └──────────────┘             │  │
 │  │                                                                        │  │
 │  └────────────────────────────────────────────────────────────────────────┘  │
 │                                                                              │
@@ -127,9 +138,9 @@ The v2 system employs six specialized agents, each with clearly defined responsi
 
 **Morning Scanner Agent.** Running during pre-market (4:00 AM - 9:30 AM ET), this agent identifies the day's momentum opportunities. It looks for pre-market gaps, unusual volume, stocks breaking out of consolidation, and catalyst-driven moves. Unlike the current system's focus on oversold bounce candidates, the Morning Scanner prioritizes strength and momentum. Its output is a ranked list of "today's opportunities" that feeds into Due Diligence.
 
-**Due Diligence Agent.** This is the quality gate before execution. When a stock is identified as a trading candidate (either from the Morning Scanner or from a mature thesis), the DD Agent performs a deep-dive analysis. It examines recent price action, volume profile, institutional ownership, recent insider transactions, analyst ratings, earnings history, and competitive positioning. The DD Agent outputs a "proceed" or "reject" recommendation with detailed reasoning. No trade executes without DD approval.
+**Due Diligence Agent.** This is the quality gate before execution, and critically, **it runs during non-market hours** to allow for thorough research without time pressure. When a stock is identified as a trading candidate (from Watchlist or Thesis Generator), the DD Agent performs deep-dive analysis overnight. It examines recent price action, volume profile, institutional ownership, recent insider transactions, analyst ratings, earnings history, and competitive positioning. The DD Agent outputs a "proceed" or "reject" recommendation with detailed reasoning, categorizing each opportunity as either a **day trade** (for the opening power hour) or a **swing trade** (1 week to 1 year hold). All DD reports are persisted to disk in both structured JSON and human-readable markdown formats for user consumption. No trade executes without DD approval.
 
-**Trade Executor Agent.** Once DD approves a trade, the Executor handles position sizing based on Kelly criterion or fixed fractional methods, order type selection (market vs. limit), and actual order placement via Alpaca API. It also attaches the thesis to the position record so we always know why we entered.
+**Trade Executor Agent.** Once DD approves a trade, the Executor handles position sizing based on Kelly criterion or fixed fractional methods, order type selection (market vs. limit), and actual order placement via Alpaca API. For day trades, execution waits until 5 minutes after market open to assess the opening range before committing. It also attaches the thesis and DD report to the position record so we always know why we entered.
 
 **Position Manager Agent.** This agent monitors open positions against their theses. It tracks P/L, checks if thesis conditions have changed, monitors for exit dates, and triggers exits when appropriate. If a catalyst fails to materialize or a thesis is invalidated, it recommends exit regardless of P/L.
 
@@ -196,13 +207,80 @@ A sample thesis might read: "NVDA will rise to $950 by February 20th following t
 
 ### 3.2 Trade Types and Time Horizons
 
-The system explicitly categorizes trades into three types, each with different management rules:
+The system categorizes trades into two primary types, with swing trades further subdivided by time horizon. The DD Agent is responsible for classifying each opportunity into the appropriate category based on the catalyst timing, technical setup, and expected move duration.
 
-**Day Trade (exit same day).** These are momentum plays on intraday moves. Typically entered within the first 30-60 minutes of market open on high-conviction setups. The position must close by end of day. Target profit: 2-5%. Stop loss: 1-2%. Risk management is tight because time horizon is short.
+#### 3.2.1 Day Trade (Power Hour Strategy)
 
-**Swing Trade (2-10 trading days).** These are multi-day trend continuation or mean reversion plays. The thesis includes a specific catalyst (earnings, product launch, technical breakout). Target profit: 5-15%. Stop loss: 3-7%. The position has both price-based and time-based exit conditions.
+**Philosophy:** The first hour of trading (9:30 AM - 10:30 AM ET) accounts for approximately 30-40% of daily volume. This liquidity creates the best opportunities for quick entries and exits. The strategy exploits the fact that overnight news and pre-market activity create imbalances that resolve quickly in the opening hour.
 
-**Position Trade (2-6 weeks).** These are higher-conviction plays on longer-term themes. Requires stronger due diligence and larger expected moves to justify the hold period. Target profit: 10-25%. Stop loss: 5-10%. These trades might ride through a catalyst event like earnings.
+**Opening Range Strategy:**
+1. **Do NOT trade at 9:30 AM** - Wait exactly 5 minutes after market open (9:35 AM)
+2. **Observe the opening range** - Track high/low of first 5 minutes
+3. **Assess momentum direction** - Is price confirming or reversing pre-market move?
+4. **Enter on confirmation** - If DD thesis aligns with opening direction, enter between 9:35-9:45 AM
+5. **Target exit by 10:30 AM** - Close position within the power hour regardless of P/L
+
+**Day Trade Characteristics:**
+- Entry window: 9:35 AM - 9:45 AM ET (after opening range established)
+- Exit deadline: 10:30 AM ET (end of power hour)
+- Maximum hold: Never past 4:00 PM same day
+- Target profit: 1-3% (tight because time is short)
+- Stop loss: 0.5-1% (must be disciplined)
+- Position size: Smaller (higher frequency, lower conviction per trade)
+
+**Ideal Day Trade Candidates:**
+- Stocks gapping 3-8% on news/earnings
+- High pre-market volume (2x+ average)
+- Clear catalyst driving the move
+- Liquid enough for quick exit (avg volume > 1M)
+
+#### 3.2.2 Swing Trade (1 Week to 1 Year)
+
+Swing trades are the core strategy for building wealth over time. Unlike day trades that exploit short-term volatility, swing trades capture larger moves driven by fundamental catalysts. The DD Agent categorizes swing trades into three time horizons:
+
+**Short-Term Swing (1-2 weeks)**
+- Catalyst: Earnings, product launches, FDA decisions
+- Entry: Technical breakout or pullback to support
+- Target profit: 5-10%
+- Stop loss: 3-5%
+- Example thesis: "AMD will rally 8% post-earnings on strong data center demand. Enter $165, target $178, stop $157, exit within 5 trading days."
+
+**Medium-Term Swing (1-3 months)**
+- Catalyst: Sector rotation, macro themes, analyst upgrades
+- Entry: Technical trend following with fundamental support
+- Target profit: 10-20%
+- Stop loss: 5-8%
+- Example thesis: "COST will benefit from consumer shift to value. Enter on pullback to $900, target $1050 by Q2 earnings, stop $850."
+
+**Long-Term Swing (3-12 months)**
+- Catalyst: Structural business transformation, industry disruption
+- Entry: Value accumulation during market weakness
+- Target profit: 20-50%
+- Stop loss: 10-15%
+- Example thesis: "META's AI investments will drive 30% revenue growth over 12 months. Accumulate at $550, target $750 by year-end, stop $475."
+
+#### 3.2.3 Trade Type Selection Theory
+
+The DD Agent uses the following framework to classify opportunities:
+
+| Factor | Day Trade | Short Swing | Medium Swing | Long Swing |
+|--------|-----------|-------------|--------------|------------|
+| Catalyst timing | Today | 1-2 weeks | 1-3 months | 3-12 months |
+| Price move expected | 1-3% | 5-10% | 10-20% | 20-50% |
+| Conviction required | Medium | Medium-High | High | Very High |
+| Position size | 2-5% portfolio | 5-10% portfolio | 10-15% portfolio | 15-25% portfolio |
+| DD depth required | Rapid (30 min) | Standard (2 hrs) | Deep (4+ hrs) | Comprehensive |
+| News sensitivity | High | Medium | Low | Very Low |
+
+**Decision Tree for Trade Type:**
+```
+Is catalyst happening TODAY?
+├── Yes → Day Trade (if pre-market gap > 3%)
+└── No → When is catalyst?
+    ├── 1-2 weeks → Short-Term Swing
+    ├── 1-3 months → Medium-Term Swing
+    └── 3+ months → Long-Term Swing (higher bar for entry)
+```
 
 ### 3.3 Opportunity Discovery
 
@@ -368,50 +446,203 @@ class MorningCandidate(BaseModel):
 
 ### 4.4 Due Diligence Agent
 
-The DD Agent is the critical quality gate. When a candidate reaches this stage, the DD Agent performs a comprehensive analysis before approving or rejecting the trade.
+The DD Agent is the critical quality gate and **runs during non-market hours** (typically overnight) to allow for thorough research without the pressure of trading decisions. This timing is intentional—deep research should not be rushed.
 
-DD Analysis Framework:
+#### 4.4.1 Operating Schedule
 
-1. **Fundamental Check**: Is this a real company with real revenue? What's the valuation (P/E, P/S)? Is it reasonable for the sector?
+```
+OVERNIGHT DD CYCLE (runs 8:00 PM - 6:00 AM ET)
+├── 8:00 PM: Collect day's candidates from Thesis Generator
+├── 8:30 PM: Begin deep research cycle
+│   ├── For each candidate:
+│   │   ├── Fundamental analysis (30-60 min per stock)
+│   │   ├── Technical analysis (15-30 min per stock)
+│   │   ├── News/catalyst verification (15 min per stock)
+│   │   └── Generate and save DD report
+│   └── Prioritize by catalyst urgency
+├── 6:00 AM: All DD reports complete and saved
+└── Reports ready for Morning Scanner to consume
+```
 
-2. **Technical Analysis**: Beyond the immediate setup, what does the longer-term picture show? Are we buying into resistance or support?
+#### 4.4.2 DD Analysis Framework
 
-3. **Catalyst Verification**: Is the catalyst real and still upcoming? Has anything changed since the thesis was formed?
+1. **Fundamental Check**: Is this a real company with real revenue? What's the valuation (P/E, P/S)? Is it reasonable for the sector? How does it compare to peers?
 
-4. **Risk Assessment**: What's the maximum realistic downside? Are there known risks (upcoming lockup expiry, secondary offering, regulatory issues)?
+2. **Technical Analysis**: Beyond the immediate setup, what does the longer-term picture show? Are we buying into resistance or support? What's the trend on multiple timeframes?
 
-5. **Position Sizing Input**: Based on volatility and conviction, what's the appropriate position size?
+3. **Catalyst Verification**: Is the catalyst real and still upcoming? Has anything changed since the thesis was formed? What's the historical price reaction to similar catalysts?
 
-The DD Agent outputs a structured report:
+4. **Risk Assessment**: What's the maximum realistic downside? Are there known risks (upcoming lockup expiry, secondary offering, regulatory issues, earnings whisper numbers)?
+
+5. **Trade Type Classification**: Based on catalyst timing and expected move duration, classify as day trade or swing trade (short/medium/long term).
+
+6. **Position Sizing Input**: Based on volatility, conviction, and trade type, what's the appropriate position size?
+
+#### 4.4.3 DD Report Model
 
 ```python
 class DueDiligenceReport(BaseModel):
     """Comprehensive DD report for a trading candidate."""
     
+    # Identification
+    report_id: str = Field(description="Unique report identifier (UUID)")
+    thesis_id: str = Field(description="Reference to the thesis being evaluated")
     symbol: str
-    analyst_name: Literal["DD Agent"]
+    company_name: str
+    sector: str
     timestamp: datetime
+    
+    # Trade Classification (determined by DD Agent)
+    recommended_trade_type: Literal[
+        "day_trade",           # Power hour play
+        "swing_short",         # 1-2 weeks
+        "swing_medium",        # 1-3 months
+        "swing_long",          # 3-12 months
+    ]
+    trade_type_rationale: str = Field(
+        description="Why this trade type was selected"
+    )
     
     # Verdict
     recommendation: Literal["approve", "reject", "conditional"]
     confidence: float = Field(ge=0.0, le=1.0)
     
-    # Analysis Sections
-    fundamental_summary: str      # 2-3 sentences on fundamentals
-    technical_summary: str        # 2-3 sentences on technicals  
-    catalyst_assessment: str      # Assessment of the catalyst
-    risk_factors: list[str]       # Key risks identified
+    # Comprehensive Analysis Sections
+    executive_summary: str = Field(
+        description="2-3 sentence summary for quick reading"
+    )
+    fundamental_analysis: str = Field(
+        description="Detailed fundamental analysis (revenue, margins, valuation)"
+    )
+    technical_analysis: str = Field(
+        description="Chart patterns, support/resistance, trend analysis"
+    )
+    catalyst_assessment: str = Field(
+        description="Deep dive on the catalyst and historical patterns"
+    )
+    competitive_landscape: str = Field(
+        description="How does this company compare to peers?"
+    )
+    risk_factors: list[str] = Field(
+        description="All identified risks, ranked by severity"
+    )
+    bull_case: str = Field(description="Best case scenario")
+    bear_case: str = Field(description="Worst case scenario")
+    base_case: str = Field(description="Most likely outcome")
     
     # Adjusted Targets (DD may modify thesis targets)
     recommended_entry: Decimal
     recommended_target: Decimal
     recommended_stop: Decimal
+    risk_reward_ratio: float = Field(description="Target distance / Stop distance")
     recommended_position_size_pct: float
     
+    # For Day Trades specifically
+    day_trade_plan: Optional[dict] = Field(
+        default=None,
+        description="Specific plan: entry time, exit time, opening range strategy"
+    )
+    
+    # For Swing Trades specifically  
+    swing_trade_plan: Optional[dict] = Field(
+        default=None,
+        description="Entry strategy, scaling plan, key dates to monitor"
+    )
+    
     # Rationale
-    approval_rationale: Optional[str] = None  # Why approve
-    rejection_rationale: Optional[str] = None  # Why reject
-    conditions: Optional[list[str]] = None    # Conditions for conditional approval
+    approval_rationale: Optional[str] = None
+    rejection_rationale: Optional[str] = None
+    conditions: Optional[list[str]] = None
+    
+    # Metadata
+    research_time_minutes: int = Field(
+        description="How long the DD research took"
+    )
+    data_sources_used: list[str] = Field(
+        description="List of data sources consulted"
+    )
+```
+
+#### 4.4.4 Report Persistence
+
+All DD reports are saved for user consumption in two formats:
+
+**1. Structured JSON** (for programmatic access):
+```
+logs/dd_reports/
+├── 2026-02-04/
+│   ├── NVDA_20260204_083000.json
+│   ├── AAPL_20260204_091500.json
+│   └── index.json  # Daily summary index
+└── latest/
+    └── {symbol}.json  # Most recent report per symbol
+```
+
+**2. Human-Readable Markdown** (for user review):
+```
+logs/dd_reports/
+├── 2026-02-04/
+│   ├── NVDA_20260204_083000.md
+│   └── AAPL_20260204_091500.md
+└── latest/
+    └── {symbol}.md
+```
+
+**Sample Markdown Report:**
+```markdown
+# Due Diligence Report: NVDA
+
+**Generated:** February 4, 2026 8:30 AM ET  
+**Thesis ID:** thesis_nvda_20260203_001  
+**Recommendation:** ✅ APPROVE  
+**Confidence:** 78%  
+**Trade Type:** Swing (Short-Term, 1-2 weeks)  
+
+---
+
+## Executive Summary
+
+NVDA presents a compelling swing trade opportunity ahead of earnings on 
+February 21st. Strong data center demand and AI chip leadership support 
+a bullish thesis with favorable risk/reward.
+
+## Trade Plan
+
+| Parameter | Value |
+|-----------|-------|
+| Entry | $880.00 |
+| Target | $950.00 (+7.9%) |
+| Stop | $840.00 (-4.5%) |
+| Risk/Reward | 1.75:1 |
+| Position Size | 8% of portfolio |
+| Expected Hold | 10-14 trading days |
+
+## Fundamental Analysis
+
+[Detailed analysis here...]
+
+## Technical Analysis
+
+[Chart analysis, support/resistance levels...]
+
+## Catalyst Assessment
+
+[Earnings expectations, historical patterns...]
+
+## Risk Factors
+
+1. **Earnings Miss Risk** - Consensus may be too high
+2. **Guidance Sensitivity** - Market focused on forward outlook
+3. **Macro Headwinds** - Tech sector rotation possible
+
+## Bull Case / Bear Case / Base Case
+
+[Scenario analysis...]
+
+---
+
+*Research Time: 45 minutes*  
+*Sources: Alpaca, SEC EDGAR, Yahoo Finance*
 ```
 
 When the DD Agent rejects a candidate, the rejection reason is logged and can be used to improve the upstream scanning and thesis generation.
@@ -644,46 +875,163 @@ class SystemState(BaseModel):
 
 ### 6.1 Daily Timeline
 
-The v2 system operates on a structured daily timeline:
+The v2 system operates on a structured daily timeline with **DD running overnight** for deep research and **power hour execution** for day trades.
 
-**Overnight (8:00 PM - 4:00 AM ET)**
-- News Monitor polls every 15 minutes
+```
+│ TIME (ET)     │ PHASE              │ ACTIVE AGENTS              │
+├───────────────┼────────────────────┼────────────────────────────┤
+│ 8:00 PM       │ DD RESEARCH START  │ DD Agent (primary)         │
+│ 8:00 PM-6:00AM│ OVERNIGHT DD       │ DD Agent, News Monitor     │
+│ 6:00 AM       │ DD REPORTS READY   │ Reports saved to disk      │
+│ 4:00 AM       │ PRE-MARKET         │ Morning Scanner            │
+│ 8:00 AM       │ FINAL PREP         │ Morning Scanner, Executor  │
+│ 9:25 AM       │ EXECUTION LOCK     │ Execution plan finalized   │
+│ 9:30 AM       │ MARKET OPEN        │ ⚠️ DO NOT TRADE YET         │
+│ 9:35 AM       │ OPENING RANGE SET  │ Executor (day trades OK)   │
+│ 9:35-10:30 AM │ POWER HOUR         │ Executor, Position Manager │
+│ 10:30 AM      │ DAY TRADE DEADLINE │ Close all day trades       │
+│ 10:30 AM-4 PM │ SWING MANAGEMENT   │ Position Manager only      │
+│ 4:00 PM       │ MARKET CLOSE       │ Daily summary generated    │
+│ 4:00-8:00 PM  │ AFTER HOURS        │ Thesis Generator (learning)│
+└───────────────┴────────────────────┴────────────────────────────┘
+```
+
+**Overnight Research Phase (8:00 PM - 6:00 AM ET)**
+- 8:00 PM: DD Agent receives candidates from Thesis Generator
+- 8:30 PM - 4:00 AM: Deep research cycle runs (no time pressure)
+  - Each candidate gets 30-60 min of thorough analysis
+  - Reports generated in JSON + Markdown format
+  - Saved to `logs/dd_reports/YYYY-MM-DD/` for user review
+- News Monitor polls every 15 minutes (low importance threshold)
 - Thesis Generator processes any high-importance events
-- System prepares watchlist for next day based on active theses
+- 6:00 AM: All DD reports complete and ready
 
-**Pre-Market (4:00 AM - 9:30 AM ET)**
-- Morning Scanner activates at 4:00 AM
-- Pre-market data collection begins
-- At 8:00 AM, first candidate list generated
-- At 9:00 AM, DD Agent begins processing top candidates
-- At 9:25 AM, final execution plan locked
+**Pre-Market Phase (4:00 AM - 9:30 AM ET)**
+- 4:00 AM: Morning Scanner activates
+- Pre-market data collection: gaps, volume, news
+- 8:00 AM: First candidate list generated, cross-referenced with DD reports
+- 9:00 AM: Final candidate selection
+  - Day trade candidates: Must have DD approval marked "day_trade"
+  - Swing candidates: Can queue for entry if setup aligns
+- 9:25 AM: Execution plan locked (no more changes)
 
-**Market Hours (9:30 AM - 4:00 PM ET)**
-- At 9:30 AM, Trade Executor submits approved orders
-- Position Manager begins monitoring (5-minute intervals)
-- Continuous P/L and thesis validation
-- Exit orders triggered as conditions hit
+**Power Hour Phase (9:30 AM - 10:30 AM ET)** 🚨 **CRITICAL WINDOW**
 
-**After Hours (4:00 PM - 8:00 PM ET)**
+```
+9:30 AM  ─── MARKET OPEN ─── DO NOT TRADE
+                │
+                ▼
+         [Wait 5 minutes]
+         [Observe opening range]
+         [High/Low of first 5 min]
+                │
+                ▼
+9:35 AM  ─── OPENING RANGE SET ─── BEGIN TRADING
+                │
+                ▼
+         [Assess: Does price confirm thesis?]
+         [Yes] → Execute day trade entries
+         [No]  → Skip, thesis invalidated for today
+                │
+                ▼
+9:35-9:45 AM ─── OPTIMAL ENTRY WINDOW
+                │
+                ▼
+         [Position Manager monitors every 2 min]
+         [Tight stops due to volatility]
+                │
+                ▼
+10:30 AM ─── POWER HOUR ENDS ─── CLOSE ALL DAY TRADES
+         [Exit regardless of P/L]
+         [Volume dropping, spreads widening]
+```
+
+**Why Wait 5 Minutes After Open?**
+1. Opening prints are often erratic (market makers adjusting)
+2. Retail order flow creates noise in first few minutes
+3. Institutional algorithms activate at specific times
+4. The 5-minute opening range gives you high/low reference points
+5. Trend for the day often established by 9:35 AM
+
+**Mid-Day Phase (10:30 AM - 4:00 PM ET)**
+- Day trades should be closed by 10:30 AM
+- Position Manager monitors swing trades (5-minute intervals)
+- Reduced activity - volume typically lowest 11 AM - 2 PM
+- No new day trade entries (setup window passed)
+- Swing trade entries OK if thesis setup appears
+
+**After Hours Phase (4:00 PM - 8:00 PM ET)**
 - Position Manager generates daily summary
 - Thesis Generator reviews closed positions for learnings
-- System prepares overnight monitoring priorities
+- After-hours earnings monitored for next day's opportunities
+- System prepares overnight DD candidate list
 
 ### 6.2 Entry Flow
 
+**Day Trade Entry Flow (Power Hour):**
 ```
-Morning Scan Result OR Mature Thesis
+[OVERNIGHT - Done by 6:00 AM]
+DD Agent completes research → Reports saved to disk
+            │
+            ▼
+[PRE-MARKET - 4:00 AM to 9:25 AM]
+Morning Scanner identifies candidates
             │
             ▼
 ┌─────────────────────────┐
-│  Quality Filter Check   │◄──── Reject low-quality candidates
+│  Has DD Report?         │──── No ─▶ Cannot trade (skip)
 └───────────┬─────────────┘
-            │ Pass
+            │ Yes (approved)
             ▼
 ┌─────────────────────────┐
-│   Due Diligence Agent   │◄──── Deep analysis
+│  DD says "day_trade"?   │──── No ─▶ Route to swing queue
 └───────────┬─────────────┘
-            │ Approve
+            │ Yes
+            ▼
+[MARKET OPEN - 9:30 AM]
+⚠️ WAIT - DO NOT TRADE YET
+            │
+            ▼
+[9:35 AM - Opening Range Established]
+Observe 5-min high/low
+            │
+            ▼
+┌─────────────────────────┐
+│ Does price confirm      │
+│ DD thesis direction?    │──── No ─▶ Skip today (thesis invalid)
+└───────────┬─────────────┘
+            │ Yes
+            ▼
+┌─────────────────────────┐
+│    Trade Executor       │◄──── Execute between 9:35-9:45 AM
+└───────────┬─────────────┘
+            │
+            ▼
+[POWER HOUR - 9:35 AM to 10:30 AM]
+Position Manager monitors every 2 min
+            │
+            ▼
+[10:30 AM - MANDATORY EXIT]
+Close all day trade positions
+```
+
+**Swing Trade Entry Flow:**
+```
+[OVERNIGHT]
+DD Agent completes research (swing_short/medium/long classification)
+            │
+            ▼
+[ANY TIME DURING MARKET HOURS]
+┌─────────────────────────┐
+│  Has DD Report?         │──── No ─▶ Cannot trade
+└───────────┬─────────────┘
+            │ Yes (approved swing)
+            ▼
+┌─────────────────────────┐
+│  Price at DD entry      │
+│  target?                │──── No ─▶ Add to watchlist, wait
+└───────────┬─────────────┘
+            │ Yes
             ▼
 ┌─────────────────────────┐
 │  Capital Availability   │◄──── Check cash, daily limits
@@ -691,12 +1039,12 @@ Morning Scan Result OR Mature Thesis
             │ OK
             ▼
 ┌─────────────────────────┐
-│    Trade Executor       │◄──── Position sizing, order placement
+│    Trade Executor       │◄──── Position sizing per DD recommendation
 └───────────┬─────────────┘
             │
             ▼
     Position Created with
-    Thesis + DD Attached
+    Thesis + DD Report Attached
 ```
 
 ### 6.3 Exit Flow
@@ -770,11 +1118,28 @@ min_approval_confidence = 0.65
 require_fundamental_check = true
 require_technical_check = true
 max_risk_score = 0.7
+run_schedule = "overnight"  # "overnight" | "on_demand"
+overnight_start_time = "20:00"  # 8:00 PM ET
+overnight_end_time = "06:00"    # 6:00 AM ET
+
+# Report persistence (for user consumption)
+save_reports = true
+report_dir = "logs/dd_reports"
+report_formats = ["json", "markdown"]  # Both formats saved
+keep_latest_per_symbol = true  # Maintain logs/dd_reports/latest/{symbol}.md
+retention_days = 90  # How long to keep old reports
 
 [trade_executor]
 default_order_type = "market"
 position_sizing_method = "fixed_fractional"  # or "kelly"
 fixed_fraction_pct = 0.10
+
+# Power Hour Settings (critical for day trades)
+opening_wait_minutes = 5       # Wait 5 min after 9:30 AM open
+power_hour_entry_start = "09:35"
+power_hour_entry_end = "09:45" # Optimal entry window
+power_hour_exit_deadline = "10:30"  # All day trades must exit
+day_trade_monitor_interval_minutes = 2  # Faster monitoring during power hour
 
 [position_manager]
 check_interval_minutes = 5
@@ -791,28 +1156,679 @@ circuit_breaker_cooldown_hours = 24
 ### 7.2 Trade Type Profiles
 
 ```toml
-[trade_types.day_trade]
-default_target_pct = 3.0
-default_stop_pct = 1.5
-max_hold_hours = 6
-min_conviction = 0.70
-
-[trade_types.swing]
+[trade_types.swing_short]
 default_target_pct = 8.0
 default_stop_pct = 4.0
-max_hold_days = 10
-min_conviction = 0.60
+max_hold_days = 14
+min_conviction = 0.65
 
-[trade_types.position]
+[trade_types.swing_medium]
 default_target_pct = 15.0
 default_stop_pct = 7.0
-max_hold_days = 30
-min_conviction = 0.75
+max_hold_days = 90
+min_conviction = 0.70
+
+[trade_types.swing_long]
+default_target_pct = 30.0
+default_stop_pct = 12.0
+max_hold_days = 365
+min_conviction = 0.80
+```
+
+### 7.3 LLM Model Configuration (Copilot SDK)
+
+The system uses the GitHub Copilot SDK (or compatible LLM providers) to power agent reasoning. Each agent can be configured to use different models based on the complexity and cost trade-offs.
+
+```toml
+# config/ai_investor_v2.toml
+
+[llm]
+# Default provider and model for all agents
+provider = "copilot"  # "copilot" | "openai" | "anthropic" | "azure"
+default_model = "gpt-4o"  # Default model for most agents
+
+# API configuration
+api_key_env = "GITHUB_TOKEN"  # Environment variable for API key
+timeout_seconds = 60
+max_retries = 3
+retry_delay_seconds = 5
+
+# Cost management
+max_tokens_per_request = 4096
+max_daily_cost_usd = 10.00  # Circuit breaker for LLM costs
+
+[llm.models]
+# Per-agent model overrides
+# Allows using different models for different agents based on:
+# - Complexity of reasoning required
+# - Cost optimization
+# - Speed requirements
+
+# News Monitor: Fast, simple classification
+news_monitor = "gpt-4o-mini"  # Cheaper, faster for simple tasks
+
+# Thesis Generator: Complex reasoning about market moves
+thesis_generator = "gpt-4o"  # Better reasoning for hypothesis formation
+
+# DD Agent: Deep research, highest quality needed
+due_diligence = "claude-sonnet-4-20250514"  # Best for nuanced analysis
+# Alternative: "gpt-4o" or "claude-3-opus-20240229"
+
+# Morning Scanner: Fast technical analysis
+morning_scanner = "gpt-4o-mini"  # Speed over depth
+
+# Position Manager: Decision-making on exits
+position_manager = "gpt-4o"  # Balance of speed and quality
+
+# Trade Executor: Simple execution logic
+trade_executor = "gpt-4o-mini"  # Mostly rule-based
+
+[llm.model_settings]
+# Model-specific parameters
+
+[llm.model_settings.gpt-4o]
+temperature = 0.3  # Lower for more consistent outputs
+max_completion_tokens = 2048
+
+[llm.model_settings.gpt-4o-mini]
+temperature = 0.2
+max_completion_tokens = 1024
+
+[llm.model_settings.claude-sonnet-4-20250514]
+temperature = 0.4  # Slightly higher for nuanced DD
+max_completion_tokens = 4096  # Longer for comprehensive reports
+
+[llm.copilot]
+# GitHub Copilot-specific settings
+# Uses VS Code Copilot extension authentication
+use_vscode_auth = true
+# Or use PAT token for CLI
+pat_env = "GITHUB_TOKEN"
+```
+
+**Model Selection Rationale:**
+
+| Agent | Recommended Model | Rationale |
+|-------|------------------|-----------|
+| News Monitor | gpt-4o-mini | Simple classification, high volume, cost-sensitive |
+| Thesis Generator | gpt-4o | Complex reasoning about catalysts and price moves |
+| DD Agent | claude-sonnet-4-20250514 | Deep analysis, nuanced judgment, detailed reports |
+| Morning Scanner | gpt-4o-mini | Fast technical screening, volume-based |
+| Position Manager | gpt-4o | Decision-making requires good judgment |
+| Trade Executor | gpt-4o-mini | Mostly rule-based, LLM for edge cases |
+
+**Copilot SDK Integration:**
+
+```python
+from beavr.llm import LLMClient
+
+class AgentBase:
+    """Base class for all agents with LLM configuration."""
+    
+    def __init__(self, config: AgentConfig):
+        self.config = config
+        self.llm = LLMClient(
+            provider=config.llm.provider,
+            model=config.llm.models.get(self.agent_name, config.llm.default_model),
+            settings=config.llm.model_settings.get(model_name, {}),
+        )
+    
+    async def reason(self, prompt: str, context: dict) -> str:
+        """Call LLM with agent-specific prompt."""
+        return await self.llm.complete(
+            system_prompt=self.SYSTEM_PROMPT,
+            user_prompt=prompt,
+            context=context,
+            max_tokens=self.max_tokens,
+        )
 ```
 
 ---
 
-## 8. Risk Management
+## 8. Agent Prompts
+
+Each agent has a carefully designed system prompt that defines its role, constraints, and output format. These prompts are the "soul" of the agent and should be version-controlled and tested.
+
+### 8.1 News Monitor Agent Prompt
+
+```
+SYSTEM PROMPT: News Monitor Agent
+
+You are a financial news analyst for an automated trading system. Your job is to 
+classify incoming news and events by their potential market impact.
+
+ROLE:
+- Monitor market events (earnings, filings, news, macro releases)
+- Classify events by type and importance
+- Flag actionable events for the trading pipeline
+- DO NOT make trading decisions—only surface information
+
+INPUT FORMAT:
+You will receive raw news data including:
+- Headlines
+- Timestamps
+- Sources
+- Related symbols (if any)
+
+ANALYSIS FRAMEWORK:
+For each event, assess:
+1. EVENT TYPE: earnings_announced | earnings_upcoming | guidance_change | 
+   analyst_upgrade | analyst_downgrade | insider_buy | insider_sell |
+   sec_filing | macro_release | news_catalyst
+   
+2. IMPORTANCE: high | medium | low
+   - HIGH: Could drive 5%+ move in liquid stock
+   - MEDIUM: Could drive 2-5% move
+   - LOW: Unlikely to drive significant move
+   
+3. ACTIONABILITY: Is this something we can trade?
+   - Specific symbol affected?
+   - Clear direction implied?
+   - Timing known?
+
+4. URGENCY: immediate | days | weeks
+   - When will this impact price?
+
+CONSTRAINTS:
+- Only flag events rated MEDIUM or higher importance
+- Do not speculate beyond what the news states
+- If uncertain about classification, default to LOWER importance
+- Never recommend trades—only classify and describe
+
+OUTPUT FORMAT (JSON):
+{
+  "event_type": "earnings_upcoming",
+  "symbol": "NVDA",
+  "importance": "high",
+  "actionability": true,
+  "headline": "NVIDIA Q4 Earnings Feb 21 After Close",
+  "summary": "NVIDIA scheduled to report Q4 FY2026 earnings. Consensus EPS $5.40, Revenue $38B. High anticipation for data center and AI chip demand.",
+  "direction_implied": "neutral_until_report",
+  "urgency": "days"
+}
+```
+
+### 8.2 Thesis Generator Agent Prompt
+
+```
+SYSTEM PROMPT: Thesis Generator Agent
+
+You are a senior portfolio manager formulating investment hypotheses. Your job is 
+to convert market events and observations into structured trade theses.
+
+ROLE:
+- Formulate specific, testable investment hypotheses
+- Define clear entry/exit criteria
+- Classify opportunities by trade type
+- Maintain high selectivity—most events should NOT become theses
+
+CORE PHILOSOPHY:
+"A thesis is a falsifiable hypothesis with defined success and failure conditions."
+
+Every thesis MUST have:
+1. CATALYST: A specific event/condition expected to drive the move
+2. DIRECTION: Clear long or short bias
+3. PRICE TARGETS: Specific entry, target, and stop levels
+4. TIME HORIZON: When the thesis should play out
+5. INVALIDATION: Conditions that would prove the thesis wrong
+
+INPUT:
+You will receive:
+- Market events from News Monitor
+- Current technical data (price, volume, indicators)
+- Existing watchlist and portfolio context
+
+THESIS QUALITY CRITERIA:
+A good thesis requires:
+1. Clear catalyst with known date or timeframe
+2. Asymmetric risk/reward (target distance > 2x stop distance)
+3. Technical support for the direction
+4. Reasonable confidence the catalyst will drive expected move
+
+TRADE TYPE CLASSIFICATION:
+- DAY_TRADE: Catalyst is TODAY, expect 1-3% move, exit by 10:30 AM
+- SWING_SHORT: Catalyst in 1-2 weeks, expect 5-10% move
+- SWING_MEDIUM: Catalyst in 1-3 months, expect 10-20% move  
+- SWING_LONG: Catalyst in 3-12 months, expect 20-50% move
+
+SELECTIVITY:
+- Most events (>70%) should result in "NO THESIS"
+- Only create thesis when conviction is genuine
+- Better to miss opportunities than force weak theses
+
+OUTPUT FORMAT (JSON):
+{
+  "action": "CREATE_THESIS",  // or "NO_THESIS"
+  "thesis": {
+    "symbol": "NVDA",
+    "trade_type": "swing_short",
+    "direction": "long",
+    "entry_rationale": "NVDA earnings Feb 21 expected to beat on data center strength. Chart shows support at $880 with room to $950 resistance.",
+    "catalyst": "Q4 FY2026 Earnings Report",
+    "catalyst_date": "2026-02-21",
+    "entry_price_target": "880.00",
+    "profit_target": "950.00",
+    "stop_loss": "840.00",
+    "expected_exit_date": "2026-02-28",
+    "max_hold_date": "2026-03-07",
+    "invalidation_conditions": [
+      "Earnings miss on revenue",
+      "Guidance below consensus",
+      "Break below $840 support"
+    ],
+    "confidence": 0.72
+  },
+  "rationale": "Strong sector momentum, historical beat pattern, and solid technical setup create favorable risk/reward."
+}
+
+// For rejection:
+{
+  "action": "NO_THESIS",
+  "reason": "Event is already priced in. Stock has rallied 15% into earnings, creating unfavorable risk/reward."
+}
+```
+
+### 8.3 Morning Scanner Agent Prompt
+
+```
+SYSTEM PROMPT: Morning Scanner Agent
+
+You are a pre-market screening specialist identifying the day's best momentum 
+opportunities. Your job is to find stocks with the highest probability of 
+significant moves in the opening hour.
+
+ROLE:
+- Scan pre-market data for momentum candidates
+- Identify gaps, volume surges, and breakout setups
+- Rank candidates by conviction
+- Cross-reference with existing DD reports
+
+SCAN CRITERIA (in order of importance):
+
+1. GAP UPS > 3%
+   - Strong pre-market volume (2x+ average)
+   - Clear catalyst (news, earnings)
+   - NOT bouncing from oversold (that's catching knives)
+   
+2. VOLUME SURGE
+   - Pre-market volume significantly above normal
+   - Indicates institutional interest
+   
+3. TECHNICAL BREAKOUT
+   - Breaking key resistance levels
+   - Continuation of established trend
+   
+4. THESIS ALIGNMENT
+   - Stocks with active DD-approved theses
+   - Setup conditions being met
+
+QUALITY FILTERS (MUST pass all):
+- Average daily volume > 500,000
+- Price > $10 (no penny stocks)
+- Market cap > $500M
+- Has DD report on file (for day trades)
+
+RANKING METHODOLOGY:
+Score each candidate 0-100 based on:
+- Gap size and quality: 30 points
+- Volume conviction: 25 points
+- Catalyst clarity: 25 points
+- Technical setup: 20 points
+
+OUTPUT FORMAT (JSON):
+{
+  "scan_timestamp": "2026-02-04T08:30:00-05:00",
+  "market_context": "Futures +0.5%, VIX 18, tech sector strong",
+  "candidates": [
+    {
+      "rank": 1,
+      "symbol": "NVDA",
+      "scan_type": "thesis_setup",
+      "pre_market_price": 882.50,
+      "pre_market_change_pct": 2.8,
+      "pre_market_volume": 1250000,
+      "avg_volume": 45000000,
+      "volume_ratio": 2.3,
+      "key_resistance": 900.00,
+      "key_support": 865.00,
+      "catalyst": "Earnings anticipation, sector momentum",
+      "dd_report_id": "dd_nvda_20260203",
+      "dd_trade_type": "day_trade",
+      "conviction_score": 85,
+      "preliminary_target_pct": 2.5,
+      "preliminary_stop_pct": 1.0,
+      "notes": "DD approved for day trade. Opening range strategy applies. Wait for 9:35 AM."
+    },
+    // ... more candidates
+  ],
+  "rejected": [
+    {
+      "symbol": "XYZ",
+      "reason": "Gap down 5% but no DD report—cannot trade without research"
+    }
+  ]
+}
+```
+
+### 8.4 Due Diligence Agent Prompt
+
+```
+SYSTEM PROMPT: Due Diligence Agent
+
+You are a senior research analyst conducting comprehensive due diligence on 
+trading candidates. Your research runs OVERNIGHT, allowing for thorough analysis 
+without time pressure. Your DD reports are saved for human review.
+
+ROLE:
+- Conduct deep fundamental and technical analysis
+- Classify opportunities as day trade or swing trade
+- Generate detailed, human-readable reports
+- Approve or reject candidates with clear rationale
+
+RESEARCH PHILOSOPHY:
+"Every trade must have a documented thesis that a human can read and validate."
+
+You have TIME. Unlike market-hours decisions, overnight DD should be thorough. 
+Spend 30-60 minutes of reasoning per candidate. Better to research deeply than 
+to surface trade quickly.
+
+ANALYSIS FRAMEWORK:
+
+1. FUNDAMENTAL ANALYSIS (30%)
+   - Revenue and earnings trends
+   - Valuation (P/E, P/S vs sector)
+   - Competitive position
+   - Management quality signals
+   - Balance sheet health
+
+2. TECHNICAL ANALYSIS (25%)
+   - Multi-timeframe trend (daily, weekly, monthly)
+   - Key support/resistance levels
+   - Volume patterns
+   - Momentum indicators (RSI, MACD)
+   - Chart patterns
+
+3. CATALYST ASSESSMENT (25%)
+   - Is the catalyst real and verified?
+   - Historical price reaction to similar catalysts
+   - Market expectations (priced in?)
+   - Timing and clarity
+
+4. RISK ASSESSMENT (20%)
+   - Maximum realistic downside
+   - Known upcoming risks
+   - Liquidity assessment
+   - Correlation to portfolio
+
+TRADE TYPE DECISION:
+Based on your analysis, classify as:
+
+DAY_TRADE if:
+- Catalyst is happening TODAY
+- Pre-market gap > 3%
+- High volume expected
+- Can capture 1-3% in opening hour
+- Will create day_trade_plan
+
+SWING_SHORT (1-2 weeks) if:
+- Catalyst in next 1-2 weeks
+- Expect 5-10% move
+- Clear entry/exit setup
+
+SWING_MEDIUM (1-3 months) if:
+- Larger catalyst or theme play
+- Expect 10-20% move
+- Can withstand short-term volatility
+
+SWING_LONG (3-12 months) if:
+- Major business transformation
+- Expect 20-50% move
+- Requires highest conviction
+
+APPROVAL CRITERIA:
+APPROVE if:
+- Risk/reward > 1.5:1
+- Catalyst is specific and verifiable
+- Technical setup supports direction
+- Confidence > 65%
+
+REJECT if:
+- Thesis is vague or speculative
+- Risk/reward unfavorable
+- Buying into major resistance
+- Too correlated with existing positions
+- Red flags in fundamentals
+
+OUTPUT FORMAT:
+Generate TWO outputs:
+
+1. STRUCTURED JSON (for system):
+{
+  "report_id": "dd_NVDA_20260204_083000",
+  "thesis_id": "thesis_nvda_20260203_001",
+  "symbol": "NVDA",
+  "company_name": "NVIDIA Corporation",
+  "sector": "Technology - Semiconductors",
+  "recommendation": "approve",
+  "confidence": 0.78,
+  "recommended_trade_type": "swing_short",
+  "trade_type_rationale": "Earnings catalyst in 2 weeks, expect 7-10% move",
+  "executive_summary": "NVDA presents compelling swing trade ahead of Feb 21 earnings...",
+  "fundamental_analysis": "...",
+  "technical_analysis": "...",
+  "catalyst_assessment": "...",
+  "risk_factors": ["Guidance sensitivity", "High expectations priced in"],
+  "bull_case": "...",
+  "bear_case": "...",
+  "base_case": "...",
+  "recommended_entry": 880.00,
+  "recommended_target": 950.00,
+  "recommended_stop": 840.00,
+  "risk_reward_ratio": 1.75,
+  "recommended_position_size_pct": 8.0,
+  "approval_rationale": "Strong fundamentals, favorable technical setup, and clear catalyst create asymmetric opportunity",
+  "research_time_minutes": 45,
+  "data_sources_used": ["Alpaca", "SEC EDGAR", "Yahoo Finance"]
+}
+
+2. MARKDOWN REPORT (for human review):
+[Generate detailed markdown report saved to logs/dd_reports/]
+```
+
+### 8.5 Position Manager Agent Prompt
+
+```
+SYSTEM PROMPT: Position Manager Agent
+
+You are a portfolio manager responsible for monitoring open positions and 
+executing exit decisions. You run continuously during market hours, checking 
+positions every 5 minutes (every 2 minutes during power hour).
+
+ROLE:
+- Monitor all open positions against their theses
+- Trigger exits when conditions are met
+- Flag positions requiring human review
+- Generate daily position summaries
+
+PRIMARY RESPONSIBILITIES:
+
+1. PRICE-BASED EXITS
+   - Stop loss hit → IMMEDIATE EXIT
+   - Profit target hit → EXECUTE EXIT
+   - Trailing stop adjustment for winners
+
+2. TIME-BASED EXITS
+   - Day trades: MUST exit by 10:30 AM
+   - Past max_hold_date → FORCE EXIT
+   - Approaching expected_exit_date → FLAG FOR REVIEW
+
+3. THESIS VALIDATION
+   - Has the catalyst occurred?
+   - Did it play out as expected?
+   - Have invalidation conditions triggered?
+
+4. POWER HOUR MANAGEMENT (9:30-10:30 AM)
+   For day trades:
+   - Monitor every 2 minutes
+   - Tight stop management
+   - Target quick profits
+   - Mandatory exit at 10:30 AM regardless of P/L
+
+DECISION FRAMEWORK:
+
+CHECK 1: Price Levels
+- If price <= stop_loss → EXIT_FULL, type="stop_hit"
+- If price >= profit_target → EXIT_FULL, type="target_hit"
+
+CHECK 2: Time Constraints
+- If trade_type == "day_trade" AND time >= 10:30 AM → EXIT_FULL, type="time_exit"
+- If date > max_hold_date → EXIT_FULL, type="time_exit"
+
+CHECK 3: Thesis Status
+- If catalyst occurred AND result matches thesis → HOLD or EXIT based on price
+- If catalyst occurred AND result contradicts thesis → FLAG_FOR_REVIEW
+- If invalidation condition triggered → EXIT_FULL, type="thesis_invalidated"
+
+CHECK 4: Partial Profits
+- If unrealized_gain > 10% AND below target → Consider EXIT_PARTIAL (50%)
+
+OUTPUT FORMAT (JSON):
+{
+  "review_timestamp": "2026-02-04T10:15:00-05:00",
+  "positions_reviewed": 3,
+  "actions": [
+    {
+      "position_id": "pos_001",
+      "symbol": "NVDA",
+      "action": "HOLD",
+      "current_price": 895.00,
+      "entry_price": 883.00,
+      "unrealized_pnl_pct": 1.36,
+      "thesis_status": "intact",
+      "rationale": "Price moving toward target, no exit conditions triggered"
+    },
+    {
+      "position_id": "pos_002",
+      "symbol": "AAPL",
+      "action": "EXIT_FULL",
+      "exit_type": "time_exit",
+      "current_price": 187.50,
+      "entry_price": 185.00,
+      "unrealized_pnl_pct": 1.35,
+      "rationale": "Day trade position, 10:30 AM deadline reached"
+    }
+  ],
+  "alerts": [
+    {
+      "position_id": "pos_003",
+      "symbol": "MSFT",
+      "alert_type": "thesis_weakening",
+      "message": "Approaching stop loss, consider manual review"
+    }
+  ]
+}
+```
+
+### 8.6 Trade Executor Agent Prompt
+
+```
+SYSTEM PROMPT: Trade Executor Agent
+
+You are a trade execution specialist responsible for converting approved trades 
+into Alpaca orders. You operate during market hours, primarily during the power 
+hour (9:35-10:30 AM) for day trades.
+
+ROLE:
+- Execute trades from approved DD reports
+- Calculate position sizes
+- Select appropriate order types
+- Manage the 5-minute wait after market open
+
+EXECUTION RULES:
+
+1. TIMING (Critical)
+   - DO NOT execute at 9:30 AM market open
+   - WAIT until 9:35 AM (opening range established)
+   - For day trades: optimal entry window is 9:35-9:45 AM
+   - For swing trades: can execute anytime during market hours
+
+2. OPENING RANGE CONFIRMATION
+   Before executing a day trade at 9:35 AM:
+   - Check if price confirms thesis direction
+   - If pre-market gap UP and currently trading BELOW open → thesis may be invalid
+   - If pre-market gap UP and holding/extending gains → thesis confirmed
+
+3. POSITION SIZING
+   Use risk-based sizing:
+   position_value = (risk_budget × portfolio_value) / (entry_price - stop_price) × entry_price
+   
+   Caps:
+   - Day trade: max 5% of portfolio
+   - Swing short: max 10% of portfolio
+   - Swing medium/long: max 15-25% of portfolio (per DD recommendation)
+
+4. ORDER TYPES
+   - Day trades: MARKET order (speed is priority)
+   - Swing limit entry: LIMIT order at DD entry price
+   - Swing market entry: MARKET order if at/below entry target
+
+5. ATTACHED ORDERS
+   For every entry, attach:
+   - Stop loss order (STOP)
+   - Take profit order (LIMIT)
+
+INPUT:
+- Approved DD report
+- Current market data
+- Portfolio state
+
+OUTPUT FORMAT (JSON):
+{
+  "execution_id": "exec_001",
+  "timestamp": "2026-02-04T09:35:30-05:00",
+  "execution_status": "executed",
+  "trades": [
+    {
+      "thesis_id": "thesis_nvda_20260203",
+      "dd_report_id": "dd_nvda_20260204",
+      "symbol": "NVDA",
+      "direction": "buy",
+      "order_type": "market",
+      "shares": 11,
+      "executed_price": 884.25,
+      "position_value": 9726.75,
+      "position_pct": 4.8,
+      "stop_loss_order": {
+        "type": "stop",
+        "trigger_price": 840.00
+      },
+      "take_profit_order": {
+        "type": "limit",
+        "price": 950.00
+      },
+      "exit_deadline": "2026-02-04T10:30:00-05:00",  // For day trades
+      "rationale": "Opening range confirmed bullish. Price holding above pre-market levels. Executing day trade per DD approval."
+    }
+  ],
+  "skipped": [
+    {
+      "thesis_id": "thesis_aapl_20260203",
+      "symbol": "AAPL",
+      "reason": "Opening range bearish—price trading below pre-market low. Thesis direction not confirmed."
+    }
+  ]
+}
+
+CONSTRAINTS:
+- Never exceed daily trade limit
+- Never exceed position size caps
+- Always attach stop loss and take profit
+- Log every execution decision for audit
+```
+
+---
+
+## 9. Risk Management
 
 ### 8.1 Position-Level Risk
 
@@ -863,7 +1879,7 @@ def calculate_position_size(
 
 ---
 
-## 9. Integration with Existing Beavr
+## 10. Integration with Existing Beavr
 
 ### 9.1 Code Organization
 
@@ -937,7 +1953,7 @@ Since v2 represents a significant change, the migration approach is:
 
 ---
 
-## 10. Success Metrics
+## 11. Success Metrics
 
 ### 10.1 System Performance
 
@@ -964,7 +1980,7 @@ The v2 system should be measured against the following targets:
 
 ---
 
-## 11. Future Enhancements
+## 12. Future Enhancements
 
 The v2 architecture is designed to support future capabilities:
 

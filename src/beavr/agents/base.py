@@ -11,7 +11,6 @@ from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from beavr.llm.client import LLMClient
-    from beavr.models.signal import Signal
 
 
 class AgentContext(BaseModel):
@@ -93,7 +92,7 @@ class BaseAgent(ABC):
     description: ClassVar[str] = ""
     version: ClassVar[str] = "0.1.0"
 
-    def __init__(self, llm: "LLMClient"):
+    def __init__(self, llm: LLMClient):
         """
         Initialize agent with LLM client.
 

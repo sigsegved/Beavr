@@ -104,6 +104,8 @@ select = [
 ]
 ignore = [
     "E501",   # line too long (handled by formatter)
+    "W291",   # trailing whitespace (too noisy until repo-wide formatting pass)
+    "W293",   # blank line contains whitespace (too noisy until repo-wide formatting pass)
     "B008",   # do not perform function calls in argument defaults
     "B027",   # empty method in abstract base class without abstract decorator
     "UP006",  # Use dict instead of Dict - causes Python 3.9 issues with Pydantic

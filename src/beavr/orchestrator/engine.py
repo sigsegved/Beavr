@@ -30,8 +30,8 @@ class OrchestratorEngine:
 
     def __init__(
         self,
-        market_analyst: "BaseAgent",
-        trading_agents: list["BaseAgent"],
+        market_analyst: BaseAgent,
+        trading_agents: list[BaseAgent],
         max_position_pct: float = 0.10,
         max_total_exposure: float = 0.95,
         min_cash_pct: float = 0.05,
@@ -240,7 +240,7 @@ class OrchestratorEngine:
         return gated
 
     def _create_signals(
-        self, signal_dicts: list[dict], ctx: AgentContext
+        self, signal_dicts: list[dict], _ctx: AgentContext
     ) -> list[Signal]:
         """
         Convert signal dictionaries to Signal objects.

@@ -8,11 +8,15 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import ClassVar, Optional
+from typing import TYPE_CHECKING, ClassVar, Optional
 
 from pydantic import BaseModel, Field
 
 from beavr.agents.base import AgentContext, AgentProposal, BaseAgent
+
+if TYPE_CHECKING:
+    from beavr.data.screener import MarketScreener, NewsScanner
+    from beavr.llm.client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +60,10 @@ class SymbolSelectorAgent(BaseAgent):
 
     def __init__(
         self,
-        llm: "LLMClient",
-        screener: Optional["MarketScreener"] = None,
-        news_scanner: Optional["NewsScanner"] = None,
-    ):
+        llm: LLMClient,
+        screener: Optional[MarketScreener] = None,
+        news_scanner: Optional[NewsScanner] = None,
+    ) -> None:
         """Initialize with LLM and optional data sources."""
         super().__init__(llm)
         self.screener = screener
@@ -159,7 +163,7 @@ OUTPUT: Select 5-8 symbols that offer the best risk/reward opportunities today."
                 },
             )
 
-    def _gather_market_data(self, ctx: AgentContext) -> dict:
+    def _gather_market_data(self, _ctx: AgentContext) -> dict:
         """Gather market movers and news."""
         data = {
             "gainers": [],
@@ -206,8 +210,8 @@ OUTPUT: Select 5-8 symbols that offer the best risk/reward opportunities today."
         
         # Format losers
         losers_text = "\n".join(
-            f"  {l['symbol']}: {l['change']:+.1f}% @ ${l['price']:.2f}"
-            for l in market_data["losers"][:8]
+            f"  {loser['symbol']}: {loser['change']:+.1f}% @ ${loser['price']:.2f}"
+            for loser in market_data["losers"][:8]
         ) or "  (no data)"
         
         # Format most active

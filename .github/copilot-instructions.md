@@ -1,77 +1,88 @@
-# Beavr Development Guidelines
+# Beavr - Automated Trading Platform
 
-## Project Overview
-Beavr is an open-source automated trading platform for retail investors. It emphasizes simplicity and extensibility - strategies are Python classes with a common interface, configured via TOML.
+## Overview
+Beavr is a Python automated trading platform for retail investors featuring:
+- Multi-agent AI trading system (LLM-powered)
+- Strategy framework (DCA, Swing trading)
+- Backtesting engine
+- Alpaca broker integration
 
 ## Tech Stack
-- **Language**: Python 3.11+
-- **Type Checking**: Pydantic for models, mypy for static analysis
-- **Broker Integration**: alpaca-py (official Alpaca SDK)
-- **CLI**: Typer + Rich
-- **Configuration**: TOML + Pydantic Settings
-- **Database**: SQLite
-- **Testing**: pytest
-- **Linting**: ruff
+- **Python 3.11+** with complete type hints
+- **Pydantic v2** for all data models
+- **alpaca-py** for broker integration
+- **Typer + Rich** for CLI
+- **SQLite** for local database
+- **pytest** for testing
+- **ruff** for linting
 
-## Code Style Guidelines
+## Critical Rules
 
-### General
-- Use type hints for all function parameters and return values
-- Use `Decimal` for all money/price/quantity fields (never float)
-- Use Pydantic models for data validation and serialization
-- Use `frozen=True` for immutable models where appropriate
-- Follow the single responsibility principle
-- Write docstrings for all public functions and classes
+### ALWAYS use Decimal for money
+```python
+# ✅ Correct
+price: Decimal = Decimal("100.50")
 
-### File Organization
+# ❌ Never - causes financial bugs
+price: float = 100.50
+```
+
+### ALWAYS add type hints
+```python
+# ✅ Correct
+def calculate(entry: Decimal, exit: Decimal) -> Decimal:
+
+# ❌ Never
+def calculate(entry, exit):
+```
+
+### ALWAYS use Pydantic for domain objects
+```python
+# ✅ Correct
+class Position(BaseModel):
+    symbol: str
+    shares: Decimal
+
+# ❌ Never
+position = {"symbol": "SPY", "shares": 10}
+```
+
+## Project Structure
 ```
 src/beavr/
-├── models/       # Pydantic data models
-├── strategies/   # Strategy implementations  
-├── backtest/     # Backtesting engine
-├── data/         # Data fetching (Alpaca)
-├── db/           # Database layer
-├── core/         # Core utilities
-└── cli/          # CLI commands
+├── models/        # Pydantic data models
+├── strategies/    # Trading strategies (BaseStrategy)
+├── agents/        # AI agents (BaseAgent)
+├── orchestrator/  # Multi-agent coordination
+├── backtest/      # Backtesting engine
+├── data/          # Market data (Alpaca)
+├── db/            # Database (SQLite)
+├── cli/           # CLI commands
+└── llm/           # LLM client
 ```
 
-### Naming Conventions
-- Classes: PascalCase (e.g., `BacktestEngine`, `SimpleDCAStrategy`)
-- Functions/methods: snake_case (e.g., `get_bars`, `calculate_metrics`)
-- Constants: UPPER_SNAKE_CASE (e.g., `DEFAULT_TIMEFRAME`)
-- Private methods: prefix with underscore (e.g., `_fetch_from_alpaca`)
+## Build & Test Commands
+```bash
+# Install
+pip install -e ".[dev,ai]"
 
-### Error Handling
-- Use custom exceptions for domain-specific errors
-- Provide helpful error messages with context
-- Log errors appropriately
+# Run all tests
+pytest
 
-### Testing
-- Write unit tests for all business logic
-- Use pytest fixtures for common setup
-- Use in-memory SQLite for database tests
-- Aim for >80% code coverage
+# Run unit tests only
+pytest tests/unit/ -v
 
-## Key Patterns
+# Lint
+ruff check src/
 
-### Strategy Interface
-All strategies inherit from `BaseStrategy` and implement `evaluate()`:
-```python
-class MyStrategy(BaseStrategy):
-    def evaluate(self, ctx: StrategyContext) -> list[Signal]:
-        # Return trading signals based on context
-        pass
+# CLI
+bvr --help
+bvr ai status
+bvr ai analyze --amount 1000
 ```
 
-### Repository Pattern
-Database access is abstracted through repository classes:
-```python
-class BarCache:
-    def get_bars(self, symbol, start, end) -> pd.DataFrame | None
-    def save_bars(self, symbol, bars) -> None
-```
-
-### Configuration
-- App config uses Pydantic Settings with env var support
-- Strategy params are defined as Pydantic Fields with validation
-- Users configure via TOML files
+## Validation Steps
+After making changes, always run:
+1. `pytest tests/unit/` - unit tests must pass
+2. `ruff check src/` - no linting errors
+3. Verify type hints are complete

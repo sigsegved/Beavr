@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Generator, Optional, Union
 
 from beavr.db.schema import SCHEMA_SQL
+from beavr.db.schema_v2 import SCHEMA_V2_SQL
 
 if TYPE_CHECKING:
     from sqlite3 import Connection
@@ -52,6 +53,8 @@ class Database:
         """Create tables if they don't exist."""
         with self.connect() as conn:
             conn.executescript(SCHEMA_SQL)
+            # Also apply v2 schema for AI Investor thesis support
+            conn.executescript(SCHEMA_V2_SQL)
 
     @contextmanager
     def connect(self) -> Generator[Connection, None, None]:

@@ -26,7 +26,7 @@ import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 from zoneinfo import ZoneInfo
 
 import typer
@@ -37,6 +37,9 @@ from rich.table import Table
 
 from beavr.core.config import get_settings
 from beavr.db import AIPositionsRepository, Database
+
+if TYPE_CHECKING:
+    from beavr.agents.base import AgentContext
 
 # US Eastern timezone for market hours
 ET = ZoneInfo("America/New_York")
@@ -92,22 +95,26 @@ def is_quality_stock(symbol: str, price: float = 0, volume: int = 0) -> bool:
     # Always allow quality universe
     if symbol in QUALITY_UNIVERSE:
         return True
-    
+
     # Filter out penny stocks
     if price > 0 and price < MIN_PRICE:
         return False
-    
+
     # Filter out extremely high priced (harder to trade)
     if price > MAX_PRICE:
         return False
-    
+
+    # Filter out illiquid names when volume is provided
+    if volume > 0 and volume < MIN_AVG_VOLUME:
+        return False
+
     # Filter out common patterns for problematic stocks
     if len(symbol) > 5:  # Most are warrants, units, etc.
         return False
-    
+
     if any(c in symbol for c in ["."]):  # Special share classes (allow - for some ETFs)
         return False
-    
+
     # Allow stocks that pass basic filters
     return True
 
@@ -118,7 +125,7 @@ def is_quality_stock(symbol: str, price: float = 0, volume: int = 0) -> bool:
 
 class AIInvestor:
     """Core AI investor functionality."""
-    
+
     def __init__(self):
         """Initialize the AI investor."""
         self._trading = None
@@ -128,21 +135,21 @@ class AIInvestor:
         self._fetcher = None
         self._db = None
         self._positions_repo = None
-    
+
     @property
     def db(self):
         """Lazy load database connection."""
         if self._db is None:
             self._db = Database()
         return self._db
-    
+
     @property
     def positions_repo(self):
         """Lazy load positions repository."""
         if self._positions_repo is None:
             self._positions_repo = AIPositionsRepository(self.db)
         return self._positions_repo
-    
+
     @property
     def trading(self):
         """Lazy load trading client."""
@@ -155,7 +162,7 @@ class AIInvestor:
                 paper=True,
             )
         return self._trading
-    
+
     @property
     def data(self):
         """Lazy load data client."""
@@ -167,7 +174,7 @@ class AIInvestor:
                 settings.alpaca_api_secret,
             )
         return self._data
-    
+
     @property
     def llm(self):
         """Lazy load LLM client."""
@@ -175,7 +182,7 @@ class AIInvestor:
             from beavr.llm.client import LLMClient
             self._llm = LLMClient()
         return self._llm
-    
+
     @property
     def screener(self):
         """Lazy load market screener."""
@@ -187,7 +194,7 @@ class AIInvestor:
                 settings.alpaca_api_secret,
             )
         return self._screener
-    
+
     @property
     def fetcher(self):
         """Lazy load data fetcher."""
@@ -199,12 +206,12 @@ class AIInvestor:
                 settings.alpaca_api_secret,
             )
         return self._fetcher
-    
+
     def get_account(self) -> dict:
         """Get account status."""
         account = self.trading.get_account()
         positions = self.trading.get_all_positions()
-        
+
         return {
             "equity": Decimal(account.equity),
             "cash": Decimal(account.cash),
@@ -221,13 +228,13 @@ class AIInvestor:
                 for p in positions
             }
         }
-    
+
     def get_quality_opportunities(self) -> list[dict]:
         """Get market movers filtered for quality."""
         result = self.screener.get_market_movers(top_n=20)
-        
+
         opportunities = []
-        
+
         # Filter gainers
         for m in result.top_gainers:
             if is_quality_stock(m.symbol, float(m.price)):
@@ -238,7 +245,7 @@ class AIInvestor:
                     "type": "gainer",
                     "in_universe": m.symbol in QUALITY_UNIVERSE,
                 })
-        
+
         # Filter losers (potential bounces)
         for m in result.top_losers:
             if is_quality_stock(m.symbol, float(m.price)):
@@ -249,12 +256,12 @@ class AIInvestor:
                     "type": "loser",
                     "in_universe": m.symbol in QUALITY_UNIVERSE,
                 })
-        
+
         # Sort to prioritize quality universe stocks
         opportunities.sort(key=lambda x: (not x["in_universe"], -abs(x["change_pct"])))
-        
+
         return opportunities
-    
+
     def get_technical_indicators(self, symbol: str) -> Optional[dict]:
         """Calculate technical indicators for a symbol."""
         try:
@@ -265,29 +272,29 @@ class AIInvestor:
             )
             if bars.empty or len(bars) < 20:
                 return None
-            
+
             close = bars["close"]
-            
+
             # RSI
             delta = close.diff()
             gain = delta.where(delta > 0, 0).rolling(14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
             rs = gain / loss
             rsi = 100 - (100 / (1 + rs))
-            
+
             # SMAs
             sma_10 = close.rolling(10).mean()
             sma_20 = close.rolling(20).mean()
             sma_50 = close.rolling(50).mean() if len(close) >= 50 else sma_20
-            
+
             # Bollinger Bands
             bb_mid = close.rolling(20).mean()
             bb_std = close.rolling(20).std()
             bb_upper = bb_mid + 2 * bb_std
             bb_lower = bb_mid - 2 * bb_std
-            
+
             current_price = float(close.iloc[-1])
-            
+
             return {
                 "price": current_price,
                 "rsi": float(rsi.iloc[-1]) if not rsi.empty else 50,
@@ -303,16 +310,16 @@ class AIInvestor:
         except Exception as e:
             logger.warning(f"Could not get indicators for {symbol}: {e}")
             return None
-    
+
     def analyze_opportunities(self, amount: Decimal, max_picks: int = 3) -> list[dict]:
         """Use AI to analyze and pick opportunities."""
         from pydantic import BaseModel, Field
-        
+
         # Get quality opportunities
         opps = self.get_quality_opportunities()
         if not opps:
             return []
-        
+
         # Get technicals for each
         with_technicals = []
         for opp in opps[:15]:  # Limit to top 15
@@ -320,10 +327,10 @@ class AIInvestor:
             if tech:
                 opp["technicals"] = tech
                 with_technicals.append(opp)
-        
+
         if not with_technicals:
             return []
-        
+
         # Build context for AI
         context = "QUALITY STOCK OPPORTUNITIES:\n\n"
         for opp in with_technicals:
@@ -338,7 +345,7 @@ class AIInvestor:
             context += f"\n  SMA20: ${tech['sma_20']:.2f}, "
             context += "Above SMA20" if tech['above_sma_20'] else "Below SMA20"
             context += f"\n  Bollinger: ${tech['bb_lower']:.2f} - ${tech['bb_upper']:.2f}\n\n"
-        
+
         # Structured output schema
         class Pick(BaseModel):
             symbol: str = Field(description="Stock symbol")
@@ -348,12 +355,12 @@ class AIInvestor:
             entry_price: float = Field(description="Current entry price")
             stop_loss_pct: float = Field(ge=2, le=15, description="Stop loss % (2-15%)")
             target_pct: float = Field(ge=3, le=30, description="Profit target % (3-30%)")
-        
+
         class Analysis(BaseModel):
             picks: list[Pick] = Field(description="1-4 stock picks, total allocation = 100%")
             market_view: str = Field(description="Brief market assessment")
             risk_level: str = Field(description="low, medium, or high")
-        
+
         prompt = f"""Analyze these QUALITY stocks and pick the best 1-4 for deploying ${amount:.2f}.
 
 {context}
@@ -376,7 +383,7 @@ Be decisive - we want to deploy this capital."""
             user_prompt=prompt,
             output_schema=Analysis,
         )
-        
+
         # Convert to standard format
         picks = []
         for pick in result.picks[:max_picks]:
@@ -384,7 +391,7 @@ Be decisive - we want to deploy this capital."""
             opp_data = next((o for o in with_technicals if o["symbol"] == pick.symbol), None)
             if not opp_data:
                 continue
-            
+
             picks.append({
                 "symbol": pick.symbol,
                 "amount": amount * Decimal(str(pick.allocation_pct)) / 100,
@@ -396,27 +403,27 @@ Be decisive - we want to deploy this capital."""
                 "target_pct": pick.target_pct,
                 "technicals": opp_data.get("technicals", {}),
             })
-        
+
         return picks, result.market_view, result.risk_level
-    
+
     def execute_buy(self, symbol: str, amount: Decimal, test_mode: bool = False) -> bool:
         """Execute a buy order."""
-        from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
-        
+        from alpaca.trading.requests import MarketOrderRequest
+
         try:
             # Get current price
             bars = self.fetcher.get_bars(symbol, date.today() - timedelta(days=5), date.today())
             if bars.empty:
                 return False
-            
+
             price = Decimal(str(bars["close"].iloc[-1]))
             qty = float(amount / price)
-            
+
             if test_mode:
                 console.print(f"  [yellow][TEST][/yellow] Would BUY {qty:.4f} {symbol} @ ${price:.2f} = ${amount:.2f}")
                 return True
-            
+
             # Try fractional first
             try:
                 self.trading.submit_order(
@@ -451,17 +458,17 @@ Be decisive - we want to deploy this capital."""
         except Exception as e:
             console.print(f"  [red]❌ Failed[/red] {symbol}: {e}")
             return False
-    
+
     def execute_sell(self, symbol: str, qty: Decimal, test_mode: bool = False) -> bool:
         """Execute a sell order."""
-        from alpaca.trading.requests import MarketOrderRequest
         from alpaca.trading.enums import OrderSide, TimeInForce
-        
+        from alpaca.trading.requests import MarketOrderRequest
+
         try:
             if test_mode:
                 console.print(f"  [yellow][TEST][/yellow] Would SELL {qty} {symbol}")
                 return True
-            
+
             self.trading.submit_order(
                 MarketOrderRequest(
                     symbol=symbol,
@@ -497,7 +504,7 @@ def get_investor() -> AIInvestor:
 def status() -> None:
     """Show portfolio status and AI readiness."""
     investor = get_investor()
-    
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -506,7 +513,7 @@ def status() -> None:
     ) as progress:
         progress.add_task("Fetching account data...", total=None)
         account = investor.get_account()
-    
+
     # Account summary
     console.print()
     console.print(Panel.fit(
@@ -515,7 +522,7 @@ def status() -> None:
         f"[bold]Buying Power:[/bold] ${account['buying_power']:,.2f}",
         title="💰 Account Status",
     ))
-    
+
     # Positions table
     if account["positions"]:
         table = Table(title="📊 Positions")
@@ -526,7 +533,7 @@ def status() -> None:
         table.add_column("Value", justify="right")
         table.add_column("P/L", justify="right")
         table.add_column("P/L %", justify="right")
-        
+
         total_pnl = Decimal(0)
         for symbol, pos in account["positions"].items():
             pnl_style = "green" if pos["pnl"] >= 0 else "red"
@@ -540,10 +547,10 @@ def status() -> None:
                 f"[{pnl_style}]{pos['pnl_pct']:+.2f}%[/{pnl_style}]",
             )
             total_pnl += pos["pnl"]
-        
+
         console.print()
         console.print(table)
-        
+
         pnl_style = "green" if total_pnl >= 0 else "red"
         console.print(f"\n[bold]Total P/L:[/bold] [{pnl_style}]${total_pnl:.2f}[/{pnl_style}]")
     else:
@@ -565,13 +572,13 @@ def invest(
     """
     investor = get_investor()
     amount_dec = Decimal(str(amount))
-    
+
     # Check account
     account = investor.get_account()
     if amount_dec > account["cash"]:
         console.print(f"[red]Insufficient cash![/red] Have ${account['cash']:.2f}, need ${amount_dec:.2f}")
         raise typer.Exit(1)
-    
+
     console.print()
     console.print(Panel.fit(
         f"[bold]Amount:[/bold] ${amount_dec:,.2f}\n"
@@ -580,7 +587,7 @@ def invest(
         f"[bold]Mode:[/bold] {'TEST' if test else 'LIVE'}",
         title="🚀 AI Investor",
     ))
-    
+
     # Analyze opportunities
     with Progress(
         SpinnerColumn(),
@@ -590,16 +597,16 @@ def invest(
     ) as progress:
         progress.add_task("🔍 Scanning quality stocks...", total=None)
         picks, market_view, risk_level = investor.analyze_opportunities(amount_dec)
-    
+
     if not picks:
         console.print("[yellow]No quality opportunities found right now.[/yellow]")
         raise typer.Exit(0)
-    
+
     # Show market view
     risk_color = {"low": "green", "medium": "yellow", "high": "red"}.get(risk_level, "white")
     console.print(f"\n[bold]Market View:[/bold] {market_view}")
     console.print(f"[bold]Risk Level:[/bold] [{risk_color}]{risk_level.upper()}[/{risk_color}]")
-    
+
     # Show picks
     table = Table(title="\n📋 Investment Plan")
     table.add_column("Symbol", style="cyan")
@@ -608,7 +615,7 @@ def invest(
     table.add_column("Strategy", style="yellow")
     table.add_column("Target", justify="right", style="green")
     table.add_column("Stop", justify="right", style="red")
-    
+
     total = Decimal(0)
     for pick in picks:
         table.add_row(
@@ -620,10 +627,10 @@ def invest(
             f"-{pick['stop_loss_pct']}%",
         )
         total += pick["amount"]
-    
+
     console.print(table)
     console.print(f"\n[bold]Total:[/bold] ${total:.2f}")
-    
+
     # Show rationales
     console.print("\n[bold]Analysis:[/bold]")
     for pick in picks:
@@ -631,7 +638,7 @@ def invest(
         console.print(f"  [cyan]{pick['symbol']}[/cyan]: {pick['rationale'][:100]}...")
         if tech:
             console.print(f"    RSI: {tech.get('rsi', 'N/A'):.1f}, Price: ${tech.get('price', 0):.2f}")
-    
+
     # Confirm
     if not test and not yes:
         console.print()
@@ -639,18 +646,18 @@ def invest(
         if not confirm:
             console.print("[yellow]Cancelled.[/yellow]")
             raise typer.Exit(0)
-    
+
     # Execute
     console.print("\n[bold]💰 Executing trades...[/bold]")
     executed = []
     for pick in picks:
         if investor.execute_buy(pick["symbol"], pick["amount"], test_mode=test):
             executed.append(pick)
-    
+
     if not executed:
         console.print("[red]No trades executed![/red]")
         raise typer.Exit(1)
-    
+
     # Track positions in database
     if not test:
         for pick in executed:
@@ -666,10 +673,10 @@ def invest(
                 )
             except Exception as e:
                 logger.warning(f"Could not track {pick['symbol']} in DB: {e}")
-    
+
     total_executed = sum(p["amount"] for p in executed)
     console.print(f"\n[green]✅ Deployed ${total_executed:.2f} across {len(executed)} positions[/green]")
-    console.print(f"\n[dim]Tip: Use 'bvr ai watch' to monitor positions and auto-exit at targets.[/dim]")
+    console.print("\n[dim]Tip: Use 'bvr ai watch' to monitor positions and auto-exit at targets.[/dim]")
 
 
 @ai_app.command()
@@ -688,16 +695,16 @@ def watch(
     consider Alpaca's bracket orders for server-side stop/target execution.
     """
     investor = get_investor()
-    
+
     account = investor.get_account()
     if not account["positions"]:
         console.print("[yellow]No positions to watch.[/yellow]")
         raise typer.Exit(0)
-    
+
     # Show tracked positions from DB
     db_positions = investor.positions_repo.get_open_positions()
     db_symbols = {p.symbol for p in db_positions}
-    
+
     console.print(Panel.fit(
         f"[bold]Default Target:[/bold] +{target}%\n"
         f"[bold]Default Stop:[/bold] -{stop}%\n"
@@ -706,29 +713,29 @@ def watch(
         f"[bold]Mode:[/bold] {'TEST' if test else 'LIVE'}",
         title="👁️  Position Monitor",
     ))
-    
+
     # Show positions with their targets
     if db_positions:
         console.print("\n[bold]Tracked Positions (from DB):[/bold]")
         for p in db_positions:
             console.print(f"  {p.symbol}: Stop -{p.stop_loss_pct}% | Target +{p.target_pct}%")
-    
+
     untracked = set(account["positions"].keys()) - db_symbols
     if untracked:
         console.print(f"\n[dim]Untracked (using defaults): {', '.join(untracked)}[/dim]")
-    
+
     console.print("\nPress Ctrl+C to stop\n")
-    
+
     try:
         while True:
             _check_exits(investor, target, stop, test)
-            
+
             # Check if any positions left
             account = investor.get_account()
             if not account["positions"]:
                 console.print("\n[green]All positions closed![/green]")
                 break
-            
+
             time.sleep(interval * 60)
     except KeyboardInterrupt:
         console.print("\n[yellow]Stopped monitoring.[/yellow]")
@@ -737,13 +744,13 @@ def watch(
 def _check_exits(investor: AIInvestor, default_target: float, default_stop: float, test: bool) -> None:
     """Check positions for exit signals using DB-tracked or default stop/target levels."""
     account = investor.get_account()
-    
+
     console.print(f"\n[dim]{datetime.now().strftime('%H:%M:%S')}[/dim] Checking positions...")
-    
+
     for symbol, pos in account["positions"].items():
         pnl_pct = pos["pnl_pct"]
         pnl_style = "green" if pos["pnl"] >= 0 else "red"
-        
+
         # Get position-specific stop/target from DB, or use defaults
         db_pos = investor.positions_repo.get_open_position(symbol)
         if db_pos:
@@ -752,29 +759,27 @@ def _check_exits(investor: AIInvestor, default_target: float, default_stop: floa
         else:
             target = default_target
             stop = default_stop
-        
+
         console.print(f"  {symbol}: ${pos['market_value']:.2f} ([{pnl_style}]{pnl_pct:+.2f}%[/{pnl_style}])")
-        
+
+        sold = False
+        exit_reason: Optional[str] = None
+
         if pnl_pct >= target:
             console.print(f"    [green]🎯 PROFIT TARGET HIT! (+{target}%)[/green]")
-            if investor.execute_sell(symbol, pos["qty"], test_mode=test):
-                # Close position in DB
-                if db_pos and not test:
-                    investor.positions_repo.close_position(
-                        db_pos.id,
-                        pos["current_price"],
-                        "target_hit"
-                    )
+            sold = investor.execute_sell(symbol, pos["qty"], test_mode=test)
+            exit_reason = "target_hit"
         elif pnl_pct <= -stop:
             console.print(f"    [red]🛑 STOP LOSS HIT! (-{stop}%)[/red]")
-            if investor.execute_sell(symbol, pos["qty"], test_mode=test):
-                # Close position in DB
-                if db_pos and not test:
-                    investor.positions_repo.close_position(
-                        db_pos.id,
-                        pos["current_price"],
-                        "stop_loss"
-                    )
+            sold = investor.execute_sell(symbol, pos["qty"], test_mode=test)
+            exit_reason = "stop_loss"
+
+        if sold and exit_reason and db_pos and not test:
+            investor.positions_repo.close_position(
+                db_pos.id,
+                pos["current_price"],
+                exit_reason,
+            )
 
 
 @ai_app.command()
@@ -786,13 +791,13 @@ def sell(
     """Sell positions."""
     investor = get_investor()
     account = investor.get_account()
-    
+
     if not account["positions"]:
         console.print("[yellow]No positions to sell.[/yellow]")
         raise typer.Exit(0)
-    
+
     positions_to_sell = []
-    
+
     if all_positions or symbol is None:
         positions_to_sell = list(account["positions"].items())
     elif symbol:
@@ -800,12 +805,12 @@ def sell(
             console.print(f"[red]No position in {symbol.upper()}[/red]")
             raise typer.Exit(1)
         positions_to_sell = [(symbol.upper(), account["positions"][symbol.upper()])]
-    
+
     console.print(f"\n[bold]Selling {len(positions_to_sell)} position(s)...[/bold]")
-    
+
     total_value = Decimal(0)
     total_pnl = Decimal(0)
-    
+
     for sym, pos in positions_to_sell:
         if investor.execute_sell(sym, pos["qty"], test_mode=test):
             total_value += pos["market_value"]
@@ -819,7 +824,7 @@ def sell(
                         pos["current_price"],
                         "manual_sell"
                     )
-    
+
     pnl_style = "green" if total_pnl >= 0 else "red"
     console.print(f"\n[bold]Total Value:[/bold] ${total_value:.2f}")
     console.print(f"[bold]Total P/L:[/bold] [{pnl_style}]${total_pnl:.2f}[/{pnl_style}]")
@@ -832,9 +837,9 @@ def analyze(
     """Analyze market opportunities without trading."""
     investor = get_investor()
     amount_dec = Decimal(str(amount))
-    
+
     console.print(f"\n[bold]🔍 Analyzing opportunities for ${amount_dec:,.2f}...[/bold]\n")
-    
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
@@ -843,7 +848,7 @@ def analyze(
     ) as progress:
         task = progress.add_task("Scanning quality stocks...", total=None)
         opps = investor.get_quality_opportunities()
-        
+
         progress.update(task, description="Getting technical indicators...")
         with_tech = []
         for opp in opps[:10]:
@@ -851,10 +856,10 @@ def analyze(
             if tech:
                 opp["technicals"] = tech
                 with_tech.append(opp)
-        
+
         progress.update(task, description="AI analyzing opportunities...")
         picks, market_view, risk_level = investor.analyze_opportunities(amount_dec)
-    
+
     # Show all opportunities
     table = Table(title="Quality Opportunities")
     table.add_column("Symbol", style="cyan")
@@ -863,11 +868,11 @@ def analyze(
     table.add_column("Change", justify="right")
     table.add_column("RSI", justify="right")
     table.add_column("Signal")
-    
+
     for opp in with_tech:
         tech = opp.get("technicals", {})
         change_style = "green" if opp["change_pct"] > 0 else "red"
-        
+
         signal = ""
         if tech.get("oversold"):
             signal = "[green]OVERSOLD[/green]"
@@ -875,7 +880,7 @@ def analyze(
             signal = "[red]OVERBOUGHT[/red]"
         elif tech.get("above_sma_20"):
             signal = "[cyan]BULLISH[/cyan]"
-        
+
         table.add_row(
             opp["symbol"],
             opp["type"].upper(),
@@ -884,15 +889,15 @@ def analyze(
             f"{tech.get('rsi', 0):.1f}",
             signal,
         )
-    
+
     console.print(table)
-    
+
     # Show AI picks
     if picks:
         risk_color = {"low": "green", "medium": "yellow", "high": "red"}.get(risk_level, "white")
         console.print(f"\n[bold]Market View:[/bold] {market_view}")
         console.print(f"[bold]Risk Level:[/bold] [{risk_color}]{risk_level.upper()}[/{risk_color}]")
-        
+
         console.print("\n[bold]AI Recommendations:[/bold]")
         for pick in picks:
             console.print(f"  [cyan]{pick['symbol']}[/cyan] ({pick['strategy']}): ${pick['amount']:.2f}")
@@ -908,7 +913,7 @@ def history(
 ) -> None:
     """Show AI trading history and performance."""
     investor = get_investor()
-    
+
     # Get positions
     if show_open:
         positions = investor.positions_repo.get_open_positions()
@@ -916,11 +921,11 @@ def history(
     else:
         positions = investor.positions_repo.get_all_positions(limit=limit)
         title = f"AI Trading History (last {limit})"
-    
+
     if not positions:
         console.print("[dim]No AI trading history found.[/dim]")
         raise typer.Exit(0)
-    
+
     # Show positions table
     table = Table(title=title)
     table.add_column("Symbol", style="cyan")
@@ -931,7 +936,7 @@ def history(
     table.add_column("Target", justify="right")
     table.add_column("P/L", justify="right")
     table.add_column("Date")
-    
+
     for pos in positions:
         status_style = {
             "open": "yellow",
@@ -939,12 +944,12 @@ def history(
             "closed_stop": "red",
             "closed_manual": "blue",
         }.get(pos.status, "white")
-        
+
         pnl_str = ""
         if pos.pnl is not None:
             pnl_style = "green" if pos.pnl >= 0 else "red"
             pnl_str = f"[{pnl_style}]${pos.pnl:.2f} ({pos.pnl_pct:+.1f}%)[/{pnl_style}]"
-        
+
         table.add_row(
             pos.symbol,
             f"[{status_style}]{pos.status}[/{status_style}]",
@@ -955,9 +960,9 @@ def history(
             pnl_str,
             pos.entry_timestamp.strftime("%Y-%m-%d"),
         )
-    
+
     console.print(table)
-    
+
     # Show summary
     summary = investor.positions_repo.get_performance_summary()
     console.print()
@@ -978,24 +983,24 @@ def history(
 def _setup_auto_logging(log_file: Path) -> None:
     """Set up logging for autonomous mode."""
     log_file.parent.mkdir(parents=True, exist_ok=True)
-    
+
     # File handler for autonomous mode
     file_handler = logging.FileHandler(log_file)
     file_handler.setFormatter(logging.Formatter(
         "%(asctime)s | %(levelname)-8s | %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     ))
-    
+
     # Add to root logger
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
     root_logger.addHandler(file_handler)
-    
+
     # Also add console handler
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s", datefmt="%H:%M:%S"))
     root_logger.addHandler(console_handler)
-    
+
     # Reduce noise
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -1007,7 +1012,7 @@ def _get_market_status(investor: AIInvestor) -> dict:
     """Get current market status from Alpaca."""
     clock = investor.trading.get_clock()
     now_et = datetime.now(ET)
-    
+
     return {
         "is_open": clock.is_open,
         "next_open": clock.next_open,
@@ -1036,7 +1041,7 @@ def _log_state(log_dir: Path, investor: AIInvestor, daily_trades: list) -> None:
             "positions": {k: str(v["qty"]) for k, v in account["positions"].items()},
             "daily_trades": daily_trades,
         }
-        
+
         state_file = log_dir / "auto_state.json"
         with open(state_file, "w") as f:
             json.dump(state, f, indent=2)
@@ -1069,12 +1074,12 @@ def auto(
         bvr ai auto --amount 2000 --target 5 --stop 3 &
     """
     investor = get_investor()
-    
+
     # Set up logging
     log_dir = Path("logs/ai_investor")
     log_file = log_dir / f"auto_{datetime.now().strftime('%Y%m%d')}.log"
     _setup_auto_logging(log_file)
-    
+
     logger.info("=" * 60)
     logger.info("🤖 AUTONOMOUS AI TRADING STARTED")
     logger.info("=" * 60)
@@ -1085,7 +1090,7 @@ def auto(
     logger.info(f"Mode: {'TEST' if test else 'LIVE'}")
     logger.info(f"Log file: {log_file}")
     logger.info("=" * 60)
-    
+
     console.print(Panel.fit(
         f"[bold]Amount/Day:[/bold] ${amount:,.2f}\n"
         f"[bold]Target:[/bold] +{target}% | [bold]Stop:[/bold] -{stop}%\n"
@@ -1095,23 +1100,23 @@ def auto(
         f"[bold]Log:[/bold] {log_file}",
         title="🤖 Autonomous AI Trading",
     ))
-    
+
     daily_trades = []
     invested_today = False
     last_trade_date = None
-    
+
     try:
         while True:
             now = datetime.now(ET)
             today = now.date()
-            
+
             # Reset daily state if new day
             if last_trade_date != today:
                 daily_trades = []
                 invested_today = False
                 last_trade_date = today
                 logger.info(f"📅 New trading day: {today}")
-            
+
             # Get market status
             try:
                 status = _get_market_status(investor)
@@ -1119,34 +1124,33 @@ def auto(
                 logger.error(f"Could not get market status: {e}")
                 time.sleep(60)
                 continue
-            
+
             market_open = status["next_open"].astimezone(ET) if status["next_open"] else None
-            market_close = status["next_close"].astimezone(ET) if status["next_close"] else None
-            
+
             # === PRE-MARKET PHASE ===
             if not status["is_open"] and market_open:
                 pre_market_time = market_open - timedelta(hours=pre_market_hours)
-                
+
                 if now >= pre_market_time and now < market_open and not invested_today:
                     logger.info("=" * 40)
                     logger.info("🌅 PRE-MARKET ANALYSIS PHASE")
                     logger.info("=" * 40)
-                    
+
                     # Show account status
                     try:
                         account = investor.get_account()
                         logger.info(f"Portfolio: ${account['equity']:.2f} | Cash: ${account['cash']:.2f}")
-                        
+
                         if account["positions"]:
                             logger.info(f"Open positions: {list(account['positions'].keys())}")
                     except Exception as e:
                         logger.error(f"Could not get account: {e}")
-                    
+
                     # Analyze opportunities
                     logger.info(f"🔍 Analyzing opportunities for ${amount:.2f}...")
                     try:
                         picks, market_view, risk_level = investor.analyze_opportunities(Decimal(str(amount)))
-                        
+
                         if picks:
                             logger.info(f"📊 Market View: {market_view}")
                             logger.info(f"⚠️  Risk Level: {risk_level}")
@@ -1155,7 +1159,7 @@ def auto(
                                 logger.info(f"   {pick['symbol']}: ${pick['amount']:.2f} ({pick['strategy']}) "
                                           f"Target +{pick['target_pct']}% Stop -{pick['stop_loss_pct']}%")
                                 logger.info(f"      {pick['rationale'][:80]}...")
-                            
+
                             # Store picks for execution at market open
                             investor._pending_picks = picks
                         else:
@@ -1164,13 +1168,13 @@ def auto(
                     except Exception as e:
                         logger.error(f"Analysis failed: {e}")
                         investor._pending_picks = []
-                    
+
                     # Wait for market open
                     wait_seconds = (market_open - datetime.now(ET)).total_seconds()
                     if wait_seconds > 0:
                         logger.info(f"⏳ Waiting {wait_seconds/60:.1f} minutes for market open...")
                         time.sleep(min(wait_seconds, 300))  # Check every 5 min max
-                    
+
                 elif now < pre_market_time:
                     # Too early, wait until pre-market
                     wait_seconds = (pre_market_time - now).total_seconds()
@@ -1185,15 +1189,15 @@ def auto(
                     _log_state(log_dir, investor, daily_trades)
                     time.sleep(3600)  # Check every hour
                     continue
-            
+
             # === MARKET OPEN - EXECUTE TRADES ===
             if status["is_open"] and not invested_today:
                 logger.info("=" * 40)
                 logger.info("🔔 MARKET OPEN - EXECUTING TRADES")
                 logger.info("=" * 40)
-                
+
                 picks = getattr(investor, "_pending_picks", None)
-                
+
                 # If no pending picks (started during market hours), analyze now
                 if not picks:
                     logger.info("🔍 No pre-market picks, analyzing now...")
@@ -1204,14 +1208,14 @@ def auto(
                     except Exception as e:
                         logger.error(f"Analysis failed: {e}")
                         picks = []
-                
+
                 if picks:
                     executed = []
                     for pick in picks:
                         try:
                             if investor.execute_buy(pick["symbol"], pick["amount"], test_mode=test):
                                 executed.append(pick)
-                                
+
                                 # Track in DB
                                 if not test:
                                     try:
@@ -1226,7 +1230,7 @@ def auto(
                                         )
                                     except Exception as e:
                                         logger.warning(f"Could not track {pick['symbol']} in DB: {e}")
-                                
+
                                 daily_trades.append({
                                     "time": datetime.now().isoformat(),
                                     "action": "BUY",
@@ -1236,7 +1240,7 @@ def auto(
                                 logger.info(f"✅ BUY {pick['symbol']}: ${pick['amount']:.2f}")
                         except Exception as e:
                             logger.error(f"Failed to buy {pick['symbol']}: {e}")
-                    
+
                     if executed:
                         total = sum(p["amount"] for p in executed)
                         logger.info(f"💰 Deployed ${total:.2f} across {len(executed)} positions")
@@ -1244,30 +1248,30 @@ def auto(
                         logger.warning("❌ No trades executed")
                 else:
                     logger.info("📭 No opportunities to trade today")
-                
+
                 invested_today = True
                 investor._pending_picks = None
                 _log_state(log_dir, investor, daily_trades)
-            
+
             # === MARKET HOURS - MONITOR POSITIONS ===
             if status["is_open"]:
                 try:
                     account = investor.get_account()
-                    
+
                     if account["positions"]:
                         logger.info(f"👁️  Checking {len(account['positions'])} positions...")
-                        
+
                         for symbol, pos in account["positions"].items():
                             pnl_pct = pos["pnl_pct"]
-                            
+
                             # Get position-specific targets from DB
                             db_pos = investor.positions_repo.get_open_position(symbol)
                             pos_target = db_pos.target_pct if db_pos else target
                             pos_stop = db_pos.stop_loss_pct if db_pos else stop
-                            
+
                             logger.info(f"   {symbol}: ${pos['market_value']:.2f} ({pnl_pct:+.2f}%) "
                                        f"[T:+{pos_target}% S:-{pos_stop}%]")
-                            
+
                             # Check exit conditions
                             if pnl_pct >= pos_target:
                                 logger.info(f"   🎯 {symbol} HIT TARGET! Selling...")
@@ -1283,7 +1287,7 @@ def auto(
                                         "pnl_pct": pnl_pct,
                                     })
                                     logger.info(f"   ✅ SOLD {symbol} at +{pnl_pct:.2f}%")
-                            
+
                             elif pnl_pct <= -pos_stop:
                                 logger.info(f"   🛑 {symbol} HIT STOP! Selling...")
                                 if investor.execute_sell(symbol, pos["qty"], test_mode=test):
@@ -1300,27 +1304,691 @@ def auto(
                                     logger.info(f"   ✅ SOLD {symbol} at {pnl_pct:.2f}%")
                     else:
                         logger.info("📭 No positions to monitor")
-                    
+
                     _log_state(log_dir, investor, daily_trades)
-                    
+
                 except Exception as e:
                     logger.error(f"Error checking positions: {e}")
-                
+
                 # Sleep until next check
                 time.sleep(check_interval * 60)
-            
+
             # Exit if --once flag
             if once and invested_today:
                 logger.info("🏁 Single cycle complete (--once flag). Exiting.")
                 break
-                
+
     except KeyboardInterrupt:
         logger.info("⛔ Interrupted by user. Shutting down...")
         _log_state(log_dir, investor, daily_trades)
     except Exception as e:
         logger.error(f"Fatal error: {e}")
         raise
-    
+
     logger.info("=" * 60)
     logger.info("🤖 AUTONOMOUS AI TRADING STOPPED")
     logger.info("=" * 60)
+
+
+# =============================================================================
+# V2 AI INVESTOR COMMANDS
+# =============================================================================
+
+
+def _build_agent_context_for_symbols(investor: AIInvestor, symbols: list[str]) -> "AgentContext":
+    """Build a minimal AgentContext for one or more symbols.
+
+    This is used by v2 CLI commands (thesis/DD) so they can call the
+    v2 agents directly with a consistent context object.
+    """
+    from beavr.agents.base import AgentContext
+    from beavr.agents.indicators import bars_to_dict_list, calculate_indicators
+
+    account = investor.get_account()
+
+    bars: dict[str, list[dict]] = {}
+    indicators: dict[str, dict[str, float]] = {}
+    prices: dict[str, Decimal] = {}
+
+    end = date.today()
+    start = end - timedelta(days=180)
+
+    for symbol in symbols:
+        symbol_u = symbol.upper()
+        df = investor.fetcher.get_bars(symbol_u, start, end)
+
+        if df is None or df.empty:
+            bars[symbol_u] = []
+            indicators[symbol_u] = {}
+            prices[symbol_u] = Decimal("0")
+            continue
+
+        # Prefer timestamp index (nicer prompts / bar dict dates)
+        if "timestamp" in df.columns:
+            df = df.set_index("timestamp")
+
+        # Current price from last close
+        try:
+            prices[symbol_u] = df["close"].iloc[-1]
+        except Exception:
+            prices[symbol_u] = Decimal("0")
+
+        bars[symbol_u] = bars_to_dict_list(df, n=20)
+        indicators[symbol_u] = calculate_indicators(df)
+
+    ctx = AgentContext(
+        current_date=date.today(),
+        timestamp=datetime.now(),
+        prices=prices,
+        bars=bars,
+        indicators=indicators,
+        cash=account["cash"],
+        positions={sym: pos["qty"] for sym, pos in account["positions"].items()},
+        portfolio_value=account["equity"],
+        current_drawdown=0.0,
+        peak_value=account["equity"],
+        risk_budget=1.0,
+        regime=None,
+        regime_confidence=0.0,
+        events=[],
+    )
+
+    return ctx
+
+
+@ai_app.command()
+def news(
+    symbols: Optional[str] = typer.Option(
+        None, "--symbols", "-s", help="Comma-separated symbols to monitor (default: all)"
+    ),
+    hours: int = typer.Option(
+        24, "--hours", "-h", help="Look back N hours for events"
+    ),
+) -> None:
+    """
+    Monitor news and detect trading events.
+    
+    Uses the NewsMonitorAgent to classify events and identify
+    potential trading opportunities.
+    """
+    from beavr.agents import NewsMonitorAgent
+    from beavr.llm import LLMClient, get_agent_config
+
+    console.print()
+    console.print(Panel.fit(
+        "[bold]📰 News Monitor[/bold]\n"
+        f"Looking back: {hours} hours\n"
+        f"Symbols: {symbols or 'All universe'}",
+        title="AI Investor V2",
+    ))
+
+    # Parse symbols (for future use with news filtering)
+    _ = [s.strip().upper() for s in symbols.split(",")] if symbols else None
+
+    # Initialize agent
+    config = get_agent_config("news_monitor")
+    llm = LLMClient(config)
+    _agent = NewsMonitorAgent(llm)  # Agent ready for real news API integration
+
+    with console.status("[bold green]Scanning for market events..."):
+        # This would normally scan real news sources
+        # For now we demonstrate the agent structure
+        console.print("\n[dim]News monitor agent initialized[/dim]")
+        console.print(f"[dim]Model: {config.model}[/dim]")
+        console.print(f"[dim]Temperature: {config.temperature}[/dim]")
+
+    console.print("\n[yellow]Note:[/yellow] Real-time news integration requires external API setup.")
+    console.print("See [link=docs/ai_investor/V2_ARCHITECTURE.md]V2 Architecture[/link] for details.")
+
+
+@ai_app.command()
+def thesis(
+    event: str = typer.Argument(..., help="Description of the market event"),
+    symbol: Optional[str] = typer.Option(
+        None, "--symbol", "-s", help="Symbol related to the event"
+    ),
+    save: bool = typer.Option(
+        False, "--save", help="Save thesis to database"
+    ),
+) -> None:
+    """
+    Generate investment thesis from a market event.
+    
+    Uses the ThesisGeneratorAgent to create a hypothesis with
+    trade type classification (day trade, swing short/medium/long).
+    """
+    from beavr.agents import ThesisGeneratorAgent
+    from beavr.llm import LLMClient, get_agent_config
+    from beavr.models import EventImportance, EventType, MarketEvent
+
+    if not symbol:
+        console.print("[red]Error:[/red] --symbol is required to generate a thesis from a manual event")
+        raise typer.Exit(1)
+
+    console.print()
+    console.print(Panel.fit(
+        f"[bold]💡 Thesis Generator[/bold]\n"
+        f"Event: {event[:80]}{'...' if len(event) > 80 else ''}\n"
+        f"Symbol: {symbol or 'To be determined'}",
+        title="AI Investor V2",
+    ))
+
+    # Initialize agent
+    config = get_agent_config("thesis_generator")
+    llm = LLMClient(config)
+    agent = ThesisGeneratorAgent(llm)
+
+    # Create event object
+    market_event = MarketEvent(
+        event_type=EventType.NEWS_CATALYST,
+        symbol=symbol.upper(),
+        headline=event,
+        summary=event,
+        source="manual_input",
+        importance=EventImportance.MEDIUM,
+    )
+
+    ctx = _build_agent_context_for_symbols(investor=get_investor(), symbols=[symbol])
+
+    with console.status("[bold green]Generating investment thesis..."):
+        thesis_obj = agent.generate_thesis_from_event(market_event, ctx)
+
+    if not thesis_obj:
+        console.print("\n[yellow]NO THESIS[/yellow] - event did not produce a tradeable hypothesis.")
+        raise typer.Exit(0)
+
+    console.print()
+    table = Table(title="📋 Generated Thesis")
+    table.add_column("Field", style="cyan")
+    table.add_column("Value")
+
+    table.add_row("Thesis ID", thesis_obj.id)
+    table.add_row("Symbol", thesis_obj.symbol)
+    table.add_row("Direction", thesis_obj.direction.value)
+    table.add_row("Trade Type", thesis_obj.trade_type.value)
+    table.add_row("Entry Target", f"${thesis_obj.entry_price_target:.2f}")
+    table.add_row("Profit Target", f"${thesis_obj.profit_target:.2f} (+{thesis_obj.target_pct:.1f}%)")
+    table.add_row("Stop Loss", f"${thesis_obj.stop_loss:.2f} (-{thesis_obj.stop_pct:.1f}%)")
+    table.add_row("R/R", f"{thesis_obj.risk_reward_ratio:.2f}:1")
+    table.add_row("Expected Exit", thesis_obj.expected_exit_date.isoformat())
+    table.add_row("Max Hold", thesis_obj.max_hold_date.isoformat())
+    table.add_row("Catalyst", thesis_obj.catalyst[:120])
+    table.add_row("Rationale", thesis_obj.entry_rationale[:120])
+    table.add_row("Confidence", f"{thesis_obj.confidence:.0%}")
+
+    console.print(table)
+
+    if save:
+        try:
+            from beavr.db.thesis_repo import ThesisRepository
+
+            repo = ThesisRepository(get_investor().db)
+            repo.create(thesis_obj)
+            console.print("\n[green]✓[/green] Thesis saved to database")
+        except Exception as e:
+            console.print(f"\n[yellow]Warning:[/yellow] Could not save thesis to DB: {e}")
+
+
+@ai_app.command()
+def dd(
+    thesis_id: Optional[str] = typer.Option(
+        None, "--thesis-id", "-t", help="Thesis ID to analyze"
+    ),
+    symbol: Optional[str] = typer.Option(
+        None, "--symbol", "-s", help="Symbol to research"
+    ),
+    rationale: Optional[str] = typer.Option(
+        None, "--rationale", "-r", help="Investment rationale"
+    ),
+    trade_type: str = typer.Option(
+        "swing_short",
+        "--trade-type",
+        help="Trade type for ad-hoc DD when --symbol is used (day_trade, swing_short, swing_medium, swing_long)",
+    ),
+    catalyst: str = typer.Option(
+        "Manual DD analysis",
+        "--catalyst",
+        help="Catalyst description for ad-hoc DD when --symbol is used",
+    ),
+    save: bool = typer.Option(
+        True, "--save/--no-save", help="Save DD report to logs/dd_reports/"
+    ),
+) -> None:
+    """
+    Run deep due diligence analysis.
+    
+    Uses the DueDiligenceAgent to perform comprehensive research.
+    Best run during non-market hours for deep analysis.
+    
+    The DD report includes:
+    - Trade type classification (day/swing)
+    - Entry/exit strategy
+    - Risk assessment
+    - Price targets
+    """
+    from beavr.agents import DueDiligenceAgent
+    from beavr.llm import LLMClient, get_agent_config
+    from beavr.models import TradeThesis, TradeType
+
+    # Validate input
+    if not thesis_id and not symbol:
+        console.print("[red]Error:[/red] Provide either --thesis-id or --symbol")
+        raise typer.Exit(1)
+
+    console.print()
+    console.print(Panel.fit(
+        f"[bold]🔬 Due Diligence Agent[/bold]\n"
+        f"{'Thesis ID: ' + str(thesis_id) if thesis_id else 'Symbol: ' + (symbol or 'N/A')}\n"
+        f"Save report: {save}",
+        title="AI Investor V2",
+    ))
+
+    # Check market hours
+    now = datetime.now(ET)
+    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+    market_close = now.replace(hour=16, minute=0, second=0, microsecond=0)
+
+    if market_open <= now <= market_close and now.weekday() < 5:
+        console.print("\n[yellow]⚠ Market is open.[/yellow] DD analysis is best run during non-market hours.")
+        console.print("Consider running this command before market open or after close.\n")
+
+    # Create or load thesis
+    thesis_obj: TradeThesis
+
+    if thesis_id:
+        try:
+            from beavr.db.thesis_repo import ThesisRepository
+
+            repo = ThesisRepository(get_investor().db)
+            loaded = repo.get(thesis_id)
+            if loaded is None:
+                console.print(f"[red]Error:[/red] No thesis found with id '{thesis_id}'")
+                raise typer.Exit(1)
+            thesis_obj = loaded
+        except typer.Exit:
+            raise
+        except Exception as e:
+            console.print(f"[red]Error:[/red] Failed to load thesis from DB: {e}")
+            raise typer.Exit(1) from e
+    else:
+        if not symbol:
+            console.print("[red]Error:[/red] Provide either --thesis-id or --symbol")
+            raise typer.Exit(1)
+
+        try:
+            trade_type_enum = TradeType(trade_type.lower())
+        except Exception as err:
+            console.print("[red]Error:[/red] Invalid --trade-type. Use: day_trade, swing_short, swing_medium, swing_long")
+            raise typer.Exit(1) from err
+
+        sym = symbol.upper()
+        ctx_for_price = _build_agent_context_for_symbols(investor=get_investor(), symbols=[sym])
+        current_price = ctx_for_price.prices.get(sym, Decimal("0"))
+        if current_price <= 0:
+            console.print(f"[red]Error:[/red] Could not fetch price/bars for {sym}")
+            raise typer.Exit(1)
+
+        # Build a reasonable placeholder thesis around current price.
+        entry = current_price.quantize(Decimal("0.01"))
+        profit_target = (current_price * (Decimal("1") + Decimal(str(trade_type_enum.default_target_pct)) / Decimal("100"))).quantize(
+            Decimal("0.01")
+        )
+        stop_loss = (current_price * (Decimal("1") - Decimal(str(trade_type_enum.default_stop_pct)) / Decimal("100"))).quantize(
+            Decimal("0.01")
+        )
+
+        today = date.today()
+        expected_exit_days = {
+            TradeType.DAY_TRADE: 0,
+            TradeType.SWING_SHORT: 10,
+            TradeType.SWING_MEDIUM: 45,
+            TradeType.SWING_LONG: 180,
+        }[trade_type_enum]
+
+        thesis_obj = TradeThesis(
+            symbol=sym,
+            trade_type=trade_type_enum,
+            entry_rationale=rationale or f"Perform due diligence on {sym} for a potential trade",
+            catalyst=catalyst,
+            entry_price_target=entry,
+            profit_target=profit_target,
+            stop_loss=stop_loss,
+            expected_exit_date=today + timedelta(days=expected_exit_days),
+            max_hold_date=today + timedelta(days=trade_type_enum.max_hold_days),
+            invalidation_conditions=[
+                "Breaks key support / invalidates technical setup",
+                "Catalyst no longer valid or negative new information emerges",
+            ],
+            source="manual_dd",
+        )
+
+    # Build agent context (include the thesis symbol)
+    ctx = _build_agent_context_for_symbols(investor=get_investor(), symbols=[thesis_obj.symbol])
+
+    # Initialize agent (save handled by CLI so we can print exact file paths)
+    config = get_agent_config("due_diligence")
+    llm = LLMClient(config)
+    agent = DueDiligenceAgent(llm, save_reports=False)
+
+    console.print(f"[dim]Model: {config.model} (optimized for deep research)[/dim]")
+
+    with console.status("[bold green]Running deep due diligence analysis..."):
+        report = agent.analyze_thesis(thesis_obj, ctx)
+
+    console.print()
+    console.print(Panel.fit(
+        f"[bold]{report.recommendation.value.upper()}[/bold] ({report.recommended_trade_type.value})\n"
+        f"Confidence: {report.confidence:.0%}\n\n"
+        f"Entry: ${report.recommended_entry:.2f}\n"
+        f"Target: ${report.recommended_target:.2f} (+{report.target_pct:.1f}%)\n"
+        f"Stop: ${report.recommended_stop:.2f} (-{report.stop_pct:.1f}%)\n"
+        f"R/R: {report.risk_reward_ratio:.2f}:1\n\n"
+        f"Summary: {report.executive_summary}",
+        title="🔬 Due Diligence Report",
+    ))
+
+    if report.day_trade_plan:
+        console.print(Panel.fit(
+            f"Entry Window: {report.day_trade_plan.entry_window_start} - {report.day_trade_plan.entry_window_end} ET\n"
+            f"Exit Deadline: {report.day_trade_plan.exit_deadline} ET\n"
+            f"Confirmation: {report.day_trade_plan.opening_range_confirmation}",
+            title="⚡ Day Trade Plan",
+        ))
+
+    if report.swing_trade_plan:
+        console.print(Panel.fit(
+            f"Entry Strategy: {report.swing_trade_plan.entry_strategy}\n"
+            f"Key Dates: {', '.join(report.swing_trade_plan.key_dates_to_monitor) if report.swing_trade_plan.key_dates_to_monitor else 'N/A'}",
+            title="📆 Swing Trade Plan",
+        ))
+
+    if save:
+        try:
+            json_path, md_path = report.save("logs/dd_reports")
+            console.print(f"\n[green]✓[/green] JSON saved to {json_path}")
+            console.print(f"[green]✓[/green] Markdown saved to {md_path}")
+        except Exception as e:
+            console.print(f"\n[yellow]Warning:[/yellow] Failed to save report: {e}")
+
+
+@ai_app.command()
+def power_hour(
+    amount: float = typer.Argument(..., help="Amount in USD to invest"),
+    test: bool = typer.Option(
+        True, "--test/--live", help="Test mode (no real trades)"
+    ),
+) -> None:
+    """
+    Execute Power Hour trading strategy.
+
+    Power Hour strategy:
+    1. Wait until 9:35 AM (after 5-min opening range)
+    2. Analyze opening range breakout/breakdown
+    3. Enter positions based on morning momentum
+    4. Exit all positions by 10:30 AM (within 1 hour)
+
+    This is a day trading strategy focused on the first hour of market open.
+    """
+    from beavr.agents import PositionManagerAgent, TradeExecutorAgent
+    from beavr.llm import LLMClient, get_agent_config
+
+    console.print()
+    console.print(Panel.fit(
+        f"[bold]⚡ Power Hour Strategy[/bold]\n\n"
+        f"Amount: ${amount:,.2f}\n"
+        f"Mode: {'TEST (no real trades)' if test else '[red]LIVE[/red]'}\n\n"
+        f"Window: 9:35 AM - 10:30 AM ET\n"
+        f"Strategy: Opening range breakout",
+        title="AI Investor V2",
+    ))
+
+    # Check if we're in the right time window
+    now = datetime.now(ET)
+    opening_range_end = now.replace(hour=9, minute=35, second=0, microsecond=0)
+    power_hour_end = now.replace(hour=10, minute=30, second=0, microsecond=0)
+    market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+
+    if now.weekday() >= 5:
+        console.print("\n[red]Error:[/red] Market is closed (weekend)")
+        raise typer.Exit(1)
+
+    if now < market_open:
+        wait_time = (market_open - now).total_seconds() / 60
+        console.print(f"\n[yellow]Market opens in {wait_time:.0f} minutes[/yellow]")
+        console.print("Power Hour starts at 9:35 AM ET")
+        raise typer.Exit(0)
+
+    if now > power_hour_end:
+        console.print("\n[yellow]Power Hour window has ended (10:30 AM)[/yellow]")
+        console.print("Run this command between 9:30 AM - 10:30 AM ET")
+        raise typer.Exit(0)
+
+    if now < opening_range_end:
+        wait_secs = (opening_range_end - now).total_seconds()
+        console.print(f"\n[yellow]Waiting for opening range to form ({wait_secs:.0f}s)...[/yellow]")
+
+    # Initialize agents
+    executor_config = get_agent_config("trade_executor")
+    executor_llm = LLMClient(executor_config)
+    executor = TradeExecutorAgent(executor_llm)
+
+    position_config = get_agent_config("position_manager")
+    position_llm = LLMClient(position_config)
+    _position_manager = PositionManagerAgent(position_llm)  # For exit monitoring
+
+    console.print(f"\n[dim]Executor model: {executor_config.model}[/dim]")
+    console.print(f"[dim]Position manager model: {position_config.model}[/dim]")
+
+    # Check if execution is allowed
+    can_execute, reason = executor.can_execute_now()
+    if not can_execute:
+        console.print(f"\n[yellow]Cannot execute:[/yellow] {reason}")
+        raise typer.Exit(0)
+
+    console.print("\n[green]✓[/green] Execution window is open")
+    console.print("[dim]Power Hour strategy would analyze opening range and execute trades[/dim]")
+
+    if test:
+        console.print("\n[yellow]TEST MODE:[/yellow] No real trades will be executed")
+    else:
+        console.print("\n[red]LIVE MODE:[/red] Real trades would be executed")
+
+
+@ai_app.command()
+def auto_v2(
+    target_return: float = typer.Option(20.0, "--target", "-t", help="Target return % (annualized)"),
+    max_drawdown: float = typer.Option(10.0, "--max-dd", help="Maximum drawdown %"),
+    day_trade_target: float = typer.Option(5.0, "--dt-target", help="Day trade profit target %"),
+    day_trade_stop: float = typer.Option(3.0, "--dt-stop", help="Day trade stop loss %"),
+    daily_limit: int = typer.Option(5, "--daily-limit", "-d", help="Maximum trades per day"),
+    capital_pct: float = typer.Option(80.0, "--capital", "-c", help="% of portfolio to use"),
+    test: bool = typer.Option(False, "--test", help="Test mode (no real trades)"),
+    once: bool = typer.Option(False, "--once", help="Run one cycle then exit"),
+) -> None:
+    """
+    Run V2 Autonomous AI Trading (thesis-driven).
+    
+    This is the FULLY AUTOMATED trading system that:
+    
+    1. OVERNIGHT (8 PM - 6 AM): Deep DD research on candidates
+    2. PRE-MARKET (4 AM - 9:30 AM): Morning momentum scan
+    3. POWER HOUR (9:35 - 10:30 AM): Day trade execution
+    4. MARKET HOURS (10:30 AM - 4 PM): Position management
+    5. AFTER HOURS (4 PM - 8 PM): Learning & prep
+    
+    The system runs 24/7, coordinating all AI agents:
+    - News Monitor (continuous)
+    - Thesis Generator (event-driven)
+    - Due Diligence Agent (overnight)
+    - Morning Scanner (pre-market)
+    - Trade Executor (market hours)
+    - Position Manager (market hours)
+    
+    Example:
+        bvr ai auto-v2 --target 20 --max-dd 10 --dt-target 5 --dt-stop 3 &
+    """
+    from beavr.agents import (
+        DueDiligenceAgent,
+        MorningScannerAgent,
+        NewsMonitorAgent,
+        PositionManagerAgent,
+        ThesisGeneratorAgent,
+        TradeExecutorAgent,
+    )
+    from beavr.db import DDReportsRepository, EventsRepository, ThesisRepository
+    from beavr.llm import LLMClient, get_agent_config
+    from beavr.orchestrator import V2AutonomousOrchestrator, V2Config
+
+    investor = get_investor()
+
+    # Set up logging
+    log_dir = Path("logs/ai_investor")
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"v2_auto_{datetime.now().strftime('%Y%m%d')}.log"
+    _setup_auto_logging(log_file)
+
+    logger.info("=" * 60)
+    logger.info("🤖 V2 AUTONOMOUS AI TRADING")
+    logger.info("=" * 60)
+    logger.info(f"Target Return: {target_return}%")
+    logger.info(f"Max Drawdown: {max_drawdown}%")
+    logger.info(f"Day Trade: +{day_trade_target}% / -{day_trade_stop}%")
+    logger.info(f"Daily Trade Limit: {daily_limit}")
+    logger.info(f"Capital Allocation: {capital_pct}%")
+    logger.info(f"Mode: {'TEST' if test else 'LIVE'}")
+    logger.info(f"Log file: {log_file}")
+    logger.info("=" * 60)
+
+    console.print(Panel.fit(
+        f"[bold]🤖 V2 Autonomous AI Trading[/bold]\n\n"
+        f"Target Return: {target_return}%\n"
+        f"Max Drawdown: {max_drawdown}%\n"
+        f"Day Trade: +{day_trade_target}% / -{day_trade_stop}% (R/R {day_trade_target/day_trade_stop:.1f}:1)\n"
+        f"Daily Limit: {daily_limit} trades\n"
+        f"Capital: {capital_pct}%\n\n"
+        f"Mode: {'[yellow]TEST[/yellow]' if test else '[green]LIVE[/green]'}\n"
+        f"Log: {log_file}",
+        title="V2 Architecture",
+    ))
+
+    # Build configuration
+    config = V2Config(
+        max_daily_loss_pct=3.0,  # 3% daily max loss
+        max_drawdown_pct=max_drawdown,
+        capital_allocation_pct=capital_pct / 100,
+        daily_trade_limit=daily_limit,
+        day_trade_target_pct=day_trade_target,
+        day_trade_stop_pct=day_trade_stop,
+        state_file=str(log_dir / "v2_state.json"),
+        log_dir=str(log_dir),
+    )
+
+    # Initialize agents
+    console.print("\n[dim]Initializing agents...[/dim]")
+
+    news_config = get_agent_config("news_monitor")
+    news_llm = LLMClient(news_config)
+    news_monitor = NewsMonitorAgent(news_llm)
+
+    thesis_config = get_agent_config("thesis_generator")
+    thesis_llm = LLMClient(thesis_config)
+    thesis_generator = ThesisGeneratorAgent(thesis_llm)
+
+    dd_config = get_agent_config("due_diligence")
+    dd_llm = LLMClient(dd_config)
+    dd_agent = DueDiligenceAgent(dd_llm)
+
+    scanner_config = get_agent_config("morning_scanner")
+    scanner_llm = LLMClient(scanner_config)
+    morning_scanner = MorningScannerAgent(scanner_llm)
+
+    executor_config = get_agent_config("trade_executor")
+    executor_llm = LLMClient(executor_config)
+    trade_executor = TradeExecutorAgent(executor_llm)
+
+    position_config = get_agent_config("position_manager")
+    position_llm = LLMClient(position_config)
+    position_manager = PositionManagerAgent(position_llm)
+
+    console.print("[green]✓[/green] Agents initialized")
+
+    # Initialize repositories
+    thesis_repo = ThesisRepository(investor.db)
+    dd_repo = DDReportsRepository(investor.db)
+    events_repo = EventsRepository(investor.db)
+
+    console.print("[green]✓[/green] Database connected")
+
+    # Create orchestrator
+    orchestrator = V2AutonomousOrchestrator(
+        news_monitor=news_monitor,
+        thesis_generator=thesis_generator,
+        dd_agent=dd_agent,
+        morning_scanner=morning_scanner,
+        trade_executor=trade_executor,
+        position_manager=position_manager,
+        thesis_repo=thesis_repo,
+        dd_repo=dd_repo,
+        events_repo=events_repo,
+        positions_repo=investor.positions_repo,
+        config=config,
+    )
+
+    # Set trading clients (unless test mode)
+    if not test:
+        orchestrator.set_trading_client(investor.trading, investor.data)
+    
+    # Set context builder
+    orchestrator.set_context_builder(
+        lambda symbols: _build_agent_context_for_symbols(investor, symbols)
+    )
+
+    console.print("[green]✓[/green] Orchestrator ready")
+
+    # Show account status
+    try:
+        account = investor.get_account()
+        console.print("\n[bold]Account Status[/bold]")
+        console.print(f"  Portfolio Value: ${account['equity']:,.2f}")
+        console.print(f"  Cash Available: ${account['cash']:,.2f}")
+        console.print(f"  Open Positions: {len(account['positions'])}")
+        if account['positions']:
+            for sym, pos in account['positions'].items():
+                console.print(f"    {sym}: ${pos['market_value']:.2f} ({pos['pnl_pct']:+.1f}%)")
+    except Exception as e:
+        logger.warning(f"Could not get account status: {e}")
+
+    console.print(f"\n[bold green]Starting V2 Autonomous Trading{'...' if not once else ' (single cycle)'}[/bold green]")
+    console.print("[dim]Press Ctrl+C to stop[/dim]\n")
+
+    try:
+        if once:
+            # Run one cycle for testing
+            logger.info("Running single cycle (--once flag)")
+            phase = orchestrator._get_current_phase()
+            logger.info(f"Current phase: {phase.value}")
+            
+            if phase.value == "overnight_dd":
+                orchestrator._run_overnight_dd_cycle()
+            elif phase.value == "pre_market":
+                candidates = orchestrator._run_pre_market_scan()
+                logger.info(f"Pre-market candidates: {candidates}")
+            elif phase.value == "power_hour":
+                orchestrator._execute_power_hour([])
+            else:
+                orchestrator._monitor_positions()
+            
+            logger.info("Single cycle complete")
+        else:
+            # Run the full autonomous loop
+            orchestrator.run()
+            
+    except KeyboardInterrupt:
+        logger.info("⛔ Shutdown requested")
+        orchestrator.stop()
+    except Exception as e:
+        logger.error(f"Fatal error: {e}")
+        raise
+
+    console.print("\n[bold]V2 Autonomous Trading stopped[/bold]")
+

@@ -112,7 +112,7 @@ class SimpleDCAParams(BaseModel):
 
     symbols: list[str] = Field(default=["SPY"], description="Symbols to buy")
     amount: Decimal = Field(
-        default=Decimal("1250"),
+        default=Decimal("1000"),
         description="Dollar amount per buy",
         ge=Decimal("1"),
     )

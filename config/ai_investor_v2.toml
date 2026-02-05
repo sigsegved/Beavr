@@ -1,0 +1,159 @@
+# Beavr AI Investor v2 Configuration
+# This file configures the thesis-driven trading system with overnight DD
+
+[system]
+mode = "paper"  # "paper" | "live"
+capital_allocation = 0.80  # Max % of portfolio for AI trading
+daily_trade_limit = 5
+max_position_pct = 0.25  # Max single position size
+
+[quality_filter]
+min_avg_volume = 500_000
+min_price = 10.0
+max_price = 1000.0
+min_market_cap = 500_000_000
+
+[news_monitor]
+poll_interval_minutes = 15
+sources = ["alpaca", "sec_edgar"]
+importance_threshold = "medium"  # Only process medium+ importance
+
+[thesis_generator]
+min_confidence = 0.6
+max_active_theses = 20
+review_interval_hours = 12
+
+[morning_scanner]
+scan_start_time = "04:00"  # ET
+gap_threshold_pct = 3.0
+volume_surge_multiple = 2.0
+max_candidates = 5
+
+[due_diligence]
+min_approval_confidence = 0.65
+require_fundamental_check = true
+require_technical_check = true
+max_risk_score = 0.7
+run_schedule = "overnight"  # "overnight" | "on_demand"
+overnight_start_time = "20:00"  # 8:00 PM ET
+overnight_end_time = "06:00"    # 6:00 AM ET
+
+# Report persistence (for user consumption)
+save_reports = true
+report_dir = "logs/dd_reports"
+report_formats = ["json", "markdown"]  # Both formats saved
+keep_latest_per_symbol = true  # Maintain logs/dd_reports/latest/{symbol}.md
+retention_days = 90  # How long to keep old reports
+
+[trade_executor]
+default_order_type = "market"
+position_sizing_method = "fixed_fractional"  # or "kelly"
+fixed_fraction_pct = 0.10
+
+# Power Hour Settings (critical for day trades)
+opening_wait_minutes = 5       # Wait 5 min after 9:30 AM open
+power_hour_entry_start = "09:35"
+power_hour_entry_end = "09:45" # Optimal entry window
+power_hour_exit_deadline = "10:30"  # All day trades must exit
+day_trade_monitor_interval_minutes = 2  # Faster monitoring during power hour
+
+[position_manager]
+check_interval_minutes = 5
+enable_partial_profits = true
+partial_profit_threshold_pct = 10.0
+partial_profit_pct = 0.50  # Sell 50% at partial profit threshold
+
+[risk]
+max_daily_loss_pct = 3.0
+max_consecutive_losses = 3
+circuit_breaker_cooldown_hours = 24
+max_drawdown_pct = 10.0  # User target: 10% max drawdown
+target_annual_return_pct = 20.0  # User target: beat SPY (~20%)
+
+# Trade Type Profiles
+[trade_types.day_trade]
+default_target_pct = 5.0  # User specified: 5% profit target
+default_stop_pct = 3.0    # User specified: 3% stop loss (R/R ~1.67:1)
+max_hold_hours = 1  # Exit by 10:30 AM
+min_conviction = 0.65
+
+[trade_types.swing_short]
+default_target_pct = 8.0
+default_stop_pct = 4.0
+max_hold_days = 14
+min_conviction = 0.65
+
+[trade_types.swing_medium]
+default_target_pct = 15.0
+default_stop_pct = 7.0
+max_hold_days = 90
+min_conviction = 0.70
+
+[trade_types.swing_long]
+default_target_pct = 30.0
+default_stop_pct = 12.0
+max_hold_days = 365
+min_conviction = 0.80
+
+# LLM Model Configuration (Copilot SDK)
+[llm]
+# Default provider and model for all agents
+provider = "copilot"  # "copilot" | "openai" | "anthropic" | "azure"
+default_model = "gpt-4o"  # Default model for most agents
+
+# API configuration
+api_key_env = "GITHUB_TOKEN"  # Environment variable for API key
+timeout_seconds = 60
+max_retries = 3
+retry_delay_seconds = 5
+
+# Cost management
+max_tokens_per_request = 4096
+max_daily_cost_usd = 10.00  # Circuit breaker for LLM costs
+
+[llm.models]
+# Per-agent model overrides
+# Allows using different models for different agents based on:
+# - Complexity of reasoning required
+# - Cost optimization
+# - Speed requirements
+
+# News Monitor: Fast, simple classification
+news_monitor = "gpt-4o-mini"  # Cheaper, faster for simple tasks
+
+# Thesis Generator: Complex reasoning about market moves
+thesis_generator = "gpt-4o"  # Better reasoning for hypothesis formation
+
+# DD Agent: Deep research, highest quality needed
+due_diligence = "claude-sonnet-4-20250514"  # Best for nuanced analysis
+
+# Morning Scanner: Fast technical analysis
+morning_scanner = "gpt-4o-mini"  # Speed over depth
+
+# Position Manager: Decision-making on exits
+position_manager = "gpt-4o"  # Balance of speed and quality
+
+# Trade Executor: Simple execution logic
+trade_executor = "gpt-4o-mini"  # Mostly rule-based
+
+[llm.model_settings]
+# Model-specific parameters
+
+[llm.model_settings.gpt-4o]
+temperature = 0.3  # Lower for more consistent outputs
+max_completion_tokens = 2048
+
+[llm.model_settings.gpt-4o-mini]
+temperature = 0.2
+max_completion_tokens = 1024
+
+[llm.model_settings.claude-sonnet-4-20250514]
+temperature = 0.4  # Slightly higher for nuanced DD
+max_completion_tokens = 4096  # Longer for comprehensive reports
+
+[llm.copilot]
+# GitHub Copilot-specific settings
+# Uses VS Code Copilot extension authentication
+use_vscode_auth = true
+# Or use PAT token for CLI
+pat_env = "GITHUB_TOKEN"

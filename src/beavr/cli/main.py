@@ -4,8 +4,8 @@ import typer
 from rich.console import Console
 
 from beavr import __version__
-from beavr.cli.backtest import backtest_app
 from beavr.cli.ai import ai_app
+from beavr.cli.backtest import backtest_app
 
 app = typer.Typer(
     name="bvr",

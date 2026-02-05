@@ -6,7 +6,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from beavr.db.connection import Database
@@ -69,7 +69,7 @@ class AIPositionsRepository:
     with the main portfolio tracking system.
     """
 
-    def __init__(self, db: "Database") -> None:
+    def __init__(self, db: Database) -> None:
         """Initialize the repository."""
         self.db = db
 

@@ -57,6 +57,10 @@ class AlpacaDataFetcher:
         """
         self.stock_client = StockHistoricalDataClient(api_key, api_secret)
         self.crypto_client = CryptoHistoricalDataClient(api_key, api_secret)
+
+        # Backwards compatibility: older code/tests expect `.client`.
+        # Use the stock client as the default "client".
+        self.client = self.stock_client
         self.cache = cache
 
     def _is_crypto(self, symbol: str) -> bool:

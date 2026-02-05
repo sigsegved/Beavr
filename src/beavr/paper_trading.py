@@ -16,10 +16,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Optional
 
-import pandas as pd
 from dotenv import load_dotenv
 
-from beavr.agents.indicators import build_agent_context_indicators, bars_to_dict_list
 from beavr.data.alpaca import AlpacaDataFetcher
 from beavr.db.cache import BarCache
 from beavr.db.connection import Database
@@ -61,7 +59,7 @@ class PaperTradingRunner:
     - Handles order execution with proper error handling
     """
 
-    def __init__(self, config: PaperTradingConfig | None = None) -> None:
+    def __init__(self, config: Optional[PaperTradingConfig] = None) -> None:
         """Initialize paper trading runner."""
         load_dotenv()
 
@@ -133,8 +131,8 @@ class PaperTradingRunner:
         """Initialize Alpaca trading and data clients."""
         try:
             from alpaca.trading.client import TradingClient
-            from alpaca.trading.requests import MarketOrderRequest
             from alpaca.trading.enums import OrderSide, TimeInForce
+            from alpaca.trading.requests import MarketOrderRequest
 
             self.trading_client = TradingClient(
                 self.api_key,
@@ -149,8 +147,8 @@ class PaperTradingRunner:
 
             logger.info("Alpaca trading client initialized (paper mode)")
 
-        except ImportError:
-            raise ImportError("alpaca-py required. Install with: pip install alpaca-py")
+        except ImportError as err:
+            raise ImportError("alpaca-py required. Install with: pip install alpaca-py") from err
 
     def get_account(self) -> dict[str, Any]:
         """Get current account state."""
@@ -214,7 +212,6 @@ class PaperTradingRunner:
             # Step 1: Get account state
             account = self.get_account()
             positions = self.get_positions()
-            position_details = self.get_position_details()
 
             logger.info(f"Account: Cash=${account['cash']:,.2f}, Portfolio=${account['portfolio_value']:,.2f}")
             logger.info(f"Positions: {len(positions)} symbols")

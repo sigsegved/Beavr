@@ -7,7 +7,6 @@ existing strategy framework for backtesting and live trading.
 from __future__ import annotations
 
 import logging
-import os
 from datetime import datetime
 from decimal import Decimal
 from typing import ClassVar, Optional, Type
@@ -16,8 +15,8 @@ from pydantic import BaseModel, Field
 
 from beavr.agents.base import AgentContext
 from beavr.agents.indicators import (
-    build_agent_context_indicators,
     bars_to_dict_list,
+    build_agent_context_indicators,
 )
 from beavr.agents.market_analyst import MarketAnalystAgent
 from beavr.agents.swing_trader import SwingTraderAgent
