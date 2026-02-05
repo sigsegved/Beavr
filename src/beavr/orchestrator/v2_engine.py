@@ -569,10 +569,14 @@ class V2AutonomousOrchestrator:
             return []
 
         # Log raw news for debugging
-        for item in news_items[:3]:  # Log first 3
-            headline = item.get("headline", item.get("title", ""))[:80]
+        for item in news_items[:5]:  # Log first 5
+            headline = item.get("headline", item.get("title", ""))
+            summary = item.get("summary", "")[:100]
             symbols = item.get("symbols", [])
-            logger.info(f"  📰 Raw news: {headline}... [{', '.join(symbols[:3]) if symbols else 'no symbols'}]")
+            logger.info(f"  📰 News: {headline or '(no headline)'}")
+            if summary:
+                logger.info(f"      Summary: {summary}...")
+            logger.info(f"      Symbols: {symbols or 'none'}")
 
         try:
             events = self.news_monitor.monitor_cycle(news_items)

@@ -224,29 +224,33 @@ class NewsScanner:
             response = self._client.get_news(self._NewsRequest(**request_params))
             
             news_items = []
-            # Handle different response formats from Alpaca
+            # Alpaca NewsSet stores news in response.data['news'] as list of dicts
             try:
-                # Try accessing as NewsSet object
-                news_list = getattr(response, 'news', None)
-                if news_list is None:
-                    # Try as dict-like
-                    if hasattr(response, '__iter__'):
-                        news_list = list(response)
-                    else:
-                        news_list = []
+                news_list = response.data.get('news', []) if hasattr(response, 'data') else []
                 
                 for n in news_list[:limit]:
-                    # Handle News object attributes
-                    news_items.append({
-                        "headline": getattr(n, 'headline', '') or '',
-                        "summary": getattr(n, 'summary', '') or '',
-                        "symbols": list(getattr(n, 'symbols', [])) or [],
-                        "source": getattr(n, 'source', '') or '',
-                        "created_at": str(getattr(n, 'created_at', '')),
-                        "url": getattr(n, 'url', '') or '',
-                    })
+                    # News items are dicts, not objects
+                    if isinstance(n, dict):
+                        news_items.append({
+                            "headline": n.get('headline', '') or '',
+                            "summary": n.get('summary', '') or '',
+                            "symbols": list(n.get('symbols', [])) or [],
+                            "source": n.get('source', '') or '',
+                            "created_at": str(n.get('created_at', '')),
+                            "url": n.get('url', '') or '',
+                        })
+                    else:
+                        # Fallback for News objects
+                        news_items.append({
+                            "headline": getattr(n, 'headline', '') or '',
+                            "summary": getattr(n, 'summary', '') or '',
+                            "symbols": list(getattr(n, 'symbols', [])) or [],
+                            "source": getattr(n, 'source', '') or '',
+                            "created_at": str(getattr(n, 'created_at', '')),
+                            "url": getattr(n, 'url', '') or '',
+                        })
             except Exception as e:
-                logger.debug(f"Error parsing news response: {e}")
+                logger.warning(f"Error parsing news response: {e}")
             
             logger.info(f"Found {len(news_items)} news items")
             return news_items
