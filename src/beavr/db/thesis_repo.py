@@ -249,6 +249,39 @@ class ThesisRepository:
                 (confidence, datetime.now().isoformat(), thesis_id),
             )
             return result.rowcount > 0
+
+    def update(self, thesis: TradeThesis) -> bool:
+        """
+        Update a thesis with all its current values.
+        
+        Args:
+            thesis: The thesis to update
+            
+        Returns:
+            True if updated
+        """
+        with self.db.connect() as conn:
+            result = conn.execute(
+                """
+                UPDATE trade_theses 
+                SET status = ?, confidence = ?, entry_price_target = ?, 
+                    profit_target = ?, stop_loss = ?, dd_report_id = ?,
+                    position_id = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    thesis.status.value,
+                    thesis.confidence,
+                    str(thesis.entry_price_target) if thesis.entry_price_target else None,
+                    str(thesis.profit_target) if thesis.profit_target else None,
+                    str(thesis.stop_loss) if thesis.stop_loss else None,
+                    thesis.dd_report_id,
+                    thesis.position_id,
+                    datetime.now().isoformat(),
+                    thesis.id,
+                ),
+            )
+            return result.rowcount > 0
     
     def get_summaries(self, limit: int = 50) -> list[ThesisSummary]:
         """
