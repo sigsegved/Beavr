@@ -457,10 +457,22 @@ class V2AutonomousOrchestrator:
         if not screener:
             return []
 
-        try:
-            movers = screener.get_market_movers(top_n=self.config.market_movers_limit)
-        except Exception as e:
-            logger.warning(f"Market mover fetch failed: {e}")
+        max_retries = 3
+        movers = None
+        for attempt in range(max_retries):
+            try:
+                movers = screener.get_market_movers(top_n=self.config.market_movers_limit)
+                break
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt
+                    logger.warning(f"Market mover fetch failed (attempt {attempt + 1}/{max_retries}): {e}, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    logger.warning(f"Market mover fetch failed after {max_retries} attempts: {e}")
+                    return []
+
+        if not movers:
             return []
 
         events: list[MarketEvent] = []
@@ -527,18 +539,26 @@ class V2AutonomousOrchestrator:
         return limited
 
     def _fetch_news_items(self, symbols: list[str]) -> list[dict[str, Any]]:
-        """Fetch raw news items for the provided symbols."""
+        """Fetch raw news items for the provided symbols with retry logic."""
         scanner = self._get_news_scanner()
         if not scanner:
             return []
 
-        try:
-            if symbols:
-                return scanner.get_news(symbols=symbols, limit=self.config.news_limit)
-            return scanner.get_news(limit=self.config.news_limit)
-        except Exception as e:
-            logger.warning(f"News fetch failed: {e}")
-            return []
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                if symbols:
+                    return scanner.get_news(symbols=symbols, limit=self.config.news_limit)
+                return scanner.get_news(limit=self.config.news_limit)
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # 1s, 2s, 4s
+                    logger.warning(f"News fetch failed (attempt {attempt + 1}/{max_retries}): {e}, retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    logger.warning(f"News fetch failed after {max_retries} attempts: {e}")
+                    return []
+        return []
 
     def _classify_news_events(self, news_items: list[dict[str, Any]]) -> list[MarketEvent]:
         """Classify raw news items into MarketEvent entries."""
