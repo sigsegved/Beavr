@@ -33,6 +33,70 @@ class AlpacaConfig(BaseModel):
         return os.environ.get(self.api_secret_env)
 
 
+class WebullConfig(BaseModel):
+    """Webull API configuration.
+
+    Attributes:
+        app_key_env: Environment variable name for Webull app key
+        app_secret_env: Environment variable name for Webull app secret
+        account_id_env: Environment variable name for Webull account ID
+        region: Webull region (us, hk, jp)
+    """
+
+    app_key_env: str = Field(default="WEBULL_APP_KEY", description="Env var for Webull app key")
+    app_secret_env: str = Field(default="WEBULL_APP_SECRET", description="Env var for Webull app secret")
+    account_id_env: str = Field(default="WEBULL_ACCOUNT_ID", description="Env var for Webull account ID")
+    region: Literal["us", "hk", "jp"] = Field(default="us", description="Webull region")
+
+    def get_app_key(self) -> Optional[str]:
+        """Get Webull app key from environment."""
+        return os.environ.get(self.app_key_env)
+
+    def get_app_secret(self) -> Optional[str]:
+        """Get Webull app secret from environment."""
+        return os.environ.get(self.app_secret_env)
+
+    def get_account_id(self) -> Optional[str]:
+        """Get Webull account ID from environment."""
+        return os.environ.get(self.account_id_env)
+
+
+class BrokerProviderConfig(BaseModel):
+    """Broker provider selection and configuration.
+
+    Attributes:
+        provider: Broker provider name (alpaca or webull)
+        paper: Whether to use paper/sandbox trading
+        alpaca: Alpaca-specific configuration
+        webull: Webull-specific configuration
+    """
+
+    provider: Literal["alpaca", "webull"] = Field(default="alpaca", description="Broker provider name")
+    paper: bool = Field(default=True, description="Use paper/sandbox trading")
+    alpaca: Optional[AlpacaConfig] = Field(default=None, description="Alpaca-specific config")
+    webull: Optional[WebullConfig] = Field(default=None, description="Webull-specific config")
+
+
+class DataProviderConfig(BaseModel):
+    """Market data provider configuration.
+
+    Attributes:
+        provider: Data provider name (defaults to broker provider)
+    """
+
+    provider: Optional[str] = Field(default=None, description="Data provider (defaults to broker provider)")
+
+
+class NewsProviderConfig(BaseModel):
+    """News provider configuration.
+
+    Attributes:
+        provider: News provider name (e.g. 'alpaca')
+    """
+
+    provider: Optional[str] = Field(default=None, description="News provider (e.g. 'alpaca')")
+
+
 class StrategyConfig(BaseModel):
     """Configuration for a single strategy instance.
 
@@ -63,6 +127,7 @@ class AppConfig(BaseSettings):
     """
 
     alpaca: AlpacaConfig = Field(default_factory=AlpacaConfig)
+    broker: Optional[BrokerProviderConfig] = Field(default=None, description="Broker provider config")
     data_dir: Path = Field(
         default_factory=lambda: Path.home() / ".beavr",
         description="Data directory"

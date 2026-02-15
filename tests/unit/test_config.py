@@ -13,9 +13,13 @@ from beavr.models.config import (
     AlpacaConfig,
     AppConfig,
     BacktestConfig,
+    BrokerProviderConfig,
+    DataProviderConfig,
     DipBuyDCAParams,
+    NewsProviderConfig,
     SimpleDCAParams,
     StrategyConfig,
+    WebullConfig,
 )
 
 
@@ -251,3 +255,151 @@ dip_threshold = 0.03
             config = load_strategy_config(example_path)
             assert config.template == "dip_buy_dca"
             assert "monthly_budget" in config.params
+
+
+class TestWebullConfig:
+    """Tests for WebullConfig."""
+
+    def test_default_config(self) -> None:
+        """Test default Webull configuration."""
+        config = WebullConfig()
+        assert config.app_key_env == "WEBULL_APP_KEY"
+        assert config.app_secret_env == "WEBULL_APP_SECRET"
+        assert config.account_id_env == "WEBULL_ACCOUNT_ID"
+        assert config.region == "us"
+
+    def test_custom_env_vars(self) -> None:
+        """Test custom env var names."""
+        config = WebullConfig(
+            app_key_env="MY_WB_KEY",
+            app_secret_env="MY_WB_SECRET",
+            account_id_env="MY_WB_ACCT",
+        )
+        assert config.app_key_env == "MY_WB_KEY"
+        assert config.app_secret_env == "MY_WB_SECRET"
+        assert config.account_id_env == "MY_WB_ACCT"
+
+    def test_get_app_key_from_env(self) -> None:
+        """Test getting app key from environment."""
+        config = WebullConfig()
+        os.environ["WEBULL_APP_KEY"] = "test_wb_key"
+        try:
+            assert config.get_app_key() == "test_wb_key"
+        finally:
+            del os.environ["WEBULL_APP_KEY"]
+
+    def test_get_app_key_missing(self) -> None:
+        """Test getting app key when not set."""
+        config = WebullConfig()
+        os.environ.pop("WEBULL_APP_KEY", None)
+        assert config.get_app_key() is None
+
+    def test_get_app_secret_from_env(self) -> None:
+        """Test getting app secret from environment."""
+        config = WebullConfig()
+        os.environ["WEBULL_APP_SECRET"] = "test_wb_secret"
+        try:
+            assert config.get_app_secret() == "test_wb_secret"
+        finally:
+            del os.environ["WEBULL_APP_SECRET"]
+
+    def test_get_account_id_from_env(self) -> None:
+        """Test getting account ID from environment."""
+        config = WebullConfig()
+        os.environ["WEBULL_ACCOUNT_ID"] = "acct_123"
+        try:
+            assert config.get_account_id() == "acct_123"
+        finally:
+            del os.environ["WEBULL_ACCOUNT_ID"]
+
+    def test_region_validation(self) -> None:
+        """Test that region must be us, hk, or jp."""
+        with pytest.raises(ValidationError):
+            WebullConfig(region="eu")  # type: ignore
+
+
+class TestBrokerProviderConfig:
+    """Tests for BrokerProviderConfig."""
+
+    def test_default_provider_is_alpaca(self) -> None:
+        """Test default provider is alpaca."""
+        config = BrokerProviderConfig()
+        assert config.provider == "alpaca"
+
+    def test_default_paper_is_true(self) -> None:
+        """Test default paper trading is enabled."""
+        config = BrokerProviderConfig()
+        assert config.paper is True
+
+    def test_with_alpaca_config(self) -> None:
+        """Test creation with alpaca sub-config."""
+        alpaca = AlpacaConfig(paper=False)
+        config = BrokerProviderConfig(provider="alpaca", alpaca=alpaca, paper=False)
+        assert config.provider == "alpaca"
+        assert config.alpaca is not None
+        assert config.alpaca.paper is False
+        assert config.paper is False
+
+    def test_with_webull_config(self) -> None:
+        """Test creation with webull sub-config."""
+        webull = WebullConfig(region="hk")
+        config = BrokerProviderConfig(provider="webull", webull=webull)
+        assert config.provider == "webull"
+        assert config.webull is not None
+        assert config.webull.region == "hk"
+
+    def test_no_sub_configs_by_default(self) -> None:
+        """Test that alpaca and webull sub-configs are None by default."""
+        config = BrokerProviderConfig()
+        assert config.alpaca is None
+        assert config.webull is None
+
+
+class TestDataProviderConfig:
+    """Tests for DataProviderConfig."""
+
+    def test_default_provider_is_none(self) -> None:
+        """Test default data provider is None."""
+        config = DataProviderConfig()
+        assert config.provider is None
+
+    def test_custom_provider(self) -> None:
+        """Test setting a custom data provider."""
+        config = DataProviderConfig(provider="alpaca")
+        assert config.provider == "alpaca"
+
+
+class TestNewsProviderConfig:
+    """Tests for NewsProviderConfig."""
+
+    def test_default_provider_is_none(self) -> None:
+        """Test default news provider is None."""
+        config = NewsProviderConfig()
+        assert config.provider is None
+
+    def test_custom_provider(self) -> None:
+        """Test setting a custom news provider."""
+        config = NewsProviderConfig(provider="alpaca")
+        assert config.provider == "alpaca"
+
+
+class TestAppConfigBrokerBackcompat:
+    """Tests for AppConfig backward compatibility with broker field."""
+
+    def test_appconfig_without_broker_works(self) -> None:
+        """Test AppConfig works without broker field (backward compat)."""
+        config = AppConfig()
+        assert config.broker is None
+        # Existing alpaca field still works
+        assert config.alpaca is not None
+        assert config.alpaca.api_key_env == "ALPACA_API_KEY"
+
+    def test_appconfig_with_broker_field(self) -> None:
+        """Test AppConfig works with broker field set."""
+        broker = BrokerProviderConfig(provider="webull", paper=False)
+        config = AppConfig(broker=broker)
+        assert config.broker is not None
+        assert config.broker.provider == "webull"
+        assert config.broker.paper is False
+        # Existing alpaca field still present
+        assert config.alpaca is not None

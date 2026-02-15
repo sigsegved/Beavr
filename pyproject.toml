@@ -35,15 +35,21 @@ dependencies = [
 ai = [
     "openai>=1.0",
 ]
+webull = [
+    "webull-python-sdk-core",
+    "webull-python-sdk-trade",
+    "webull-python-sdk-mdata",
+]
 dev = [
     "pytest>=8.0",
+    "pytest-cov>=5.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
     "mypy>=1.8",
     "pandas-stubs>=2.0",
 ]
 all = [
-    "beavr[ai,dev]",
+    "beavr[ai,dev,webull]",
 ]
 
 [project.scripts]
@@ -61,7 +67,7 @@ packages = ["src/beavr"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 asyncio_mode = "auto"
-addopts = "-v --tb=short"
+addopts = "-v --tb=short --cov=beavr --cov-report=term-missing"
 
 [tool.mypy]
 python_version = "3.9"
@@ -78,10 +84,30 @@ namespace_packages = true
 explicit_package_bases = true
 mypy_path = "src"
 
+[tool.coverage.run]
+source = ["src/beavr"]
+omit = [
+    "*/tests/*",
+    "*/__pycache__/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
+show_missing = true
+fail_under = 0
+
 [[tool.mypy.overrides]]
 module = [
     "alpaca.*",
     "pandas.*",
+    "webullsdkcore.*",
+    "webullsdktrade.*",
+    "webullsdkmdata.*",
 ]
 ignore_missing_imports = true
 
