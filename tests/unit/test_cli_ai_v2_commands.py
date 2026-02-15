@@ -33,12 +33,12 @@ class _FakeFetcher:
 
 class _FakeInvestor:
     def __init__(self, df: pd.DataFrame) -> None:
-        self._fetcher = _FakeFetcher(df)
+        self._data_provider = _FakeFetcher(df)
         self._db = SimpleNamespace()
 
     @property
-    def fetcher(self) -> _FakeFetcher:
-        return self._fetcher
+    def data_provider(self) -> _FakeFetcher:
+        return self._data_provider
 
     @property
     def db(self):  # noqa: ANN001

@@ -12,20 +12,38 @@ from beavr.strategies.simple_dca import SimpleDCAStrategy
 
 
 class MockDataFetcher:
-    """Mock data fetcher for testing."""
+    """Mock data fetcher implementing MarketDataProvider protocol."""
 
     def __init__(self, bars: dict[str, pd.DataFrame]) -> None:
         self.bars = bars
 
-    def get_multi_bars(
+    @property
+    def provider_name(self) -> str:
+        return "mock"
+
+    def get_bars(
+        self,
+        symbol: str,
+        start: date,
+        end: date,
+        timeframe: str = "1day",
+    ) -> pd.DataFrame:
+        """Return pre-configured bar data for a single symbol."""
+        return self.bars.get(symbol, pd.DataFrame())
+
+    def get_bars_multi(
         self,
         symbols: list[str],
         start: date,
         end: date,
-        timeframe: str = "1Day",
+        timeframe: str = "1day",
     ) -> dict[str, pd.DataFrame]:
         """Return pre-configured bar data."""
         return {s: self.bars.get(s, pd.DataFrame()) for s in symbols}
+
+    def get_snapshot(self, symbol: str) -> dict:
+        """Return empty snapshot."""
+        return {}
 
 
 def create_test_bars(

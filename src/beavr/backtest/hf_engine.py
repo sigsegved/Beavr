@@ -1,5 +1,7 @@
 """High-frequency backtest engine for minute-level strategies."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from decimal import Decimal
@@ -7,7 +9,7 @@ from uuid import uuid4
 
 import pandas as pd
 
-from beavr.data.alpaca import AlpacaDataFetcher
+from beavr.broker.protocols import MarketDataProvider
 from beavr.models.trade import Trade
 from beavr.strategies.base import BaseStrategy
 
@@ -91,7 +93,7 @@ class HFContext:
 class HFBacktestEngine:
     """High-frequency backtest engine supporting minute/5-minute bars."""
 
-    def __init__(self, data_fetcher: AlpacaDataFetcher):
+    def __init__(self, data_fetcher: MarketDataProvider):
         self.data = data_fetcher
 
     def run(
@@ -106,16 +108,16 @@ class HFBacktestEngine:
         run_id = str(uuid4())
 
         # Map timeframe
-        alpaca_tf = "1Min" if timeframe in ["1Min", "1min"] else "1Hour"
+        provider_tf = "1min" if timeframe in ["1Min", "1min"] else "1hour"
         if timeframe in ["5Min", "5min"]:
-            alpaca_tf = "1Min"  # Fetch 1min and resample
+            provider_tf = "1min"  # Fetch 1min and resample
 
-        print(f"Fetching {alpaca_tf} data for {strategy.symbols}...")
+        print(f"Fetching {provider_tf} data for {strategy.symbols}...")
 
         # Fetch minute data
         all_bars = {}
         for symbol in strategy.symbols:
-            bars = self.data.get_bars(symbol, start_date, end_date, alpaca_tf)
+            bars = self.data.get_bars(symbol, start_date, end_date, provider_tf)
             if timeframe in ["5Min", "5min"] and not bars.empty:
                 bars = self._resample_to_5min(bars)
             all_bars[symbol] = bars

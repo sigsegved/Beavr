@@ -12,7 +12,7 @@ import pandas as pd
 
 from beavr.backtest.metrics import BacktestMetrics, calculate_metrics
 from beavr.backtest.portfolio import SimulatedPortfolio
-from beavr.data.alpaca import AlpacaDataFetcher
+from beavr.broker.protocols import MarketDataProvider
 from beavr.db.results import BacktestResultsRepository
 from beavr.models.portfolio import Position
 from beavr.models.trade import Trade
@@ -85,7 +85,7 @@ class BacktestEngine:
 
     def __init__(
         self,
-        data_fetcher: AlpacaDataFetcher,
+        data_fetcher: MarketDataProvider,
         results_repo: Optional[BacktestResultsRepository] = None,
     ) -> None:
         """Initialize the backtest engine.
@@ -124,21 +124,21 @@ class BacktestEngine:
             use_hourly = strategy.params.use_hourly_data
 
         # Fetch daily data for all symbols
-        bars = self.data.get_multi_bars(
+        bars = self.data.get_bars_multi(
             symbols=strategy.symbols,
             start=start_date,
             end=end_date,
-            timeframe="1Day",
+            timeframe="1day",
         )
 
         # Fetch hourly data if strategy requests it (for better dip detection)
         hourly_bars: dict[str, pd.DataFrame] = {}
         if use_hourly:
-            hourly_bars = self.data.get_multi_bars(
+            hourly_bars = self.data.get_bars_multi(
                 symbols=strategy.symbols,
                 start=start_date,
                 end=end_date,
-                timeframe="1Hour",
+                timeframe="1hour",
             )
 
         # Get trading days (days with data)

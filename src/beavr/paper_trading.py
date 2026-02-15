@@ -1,14 +1,13 @@
 """Paper trading runner for AI Investor.
 
 This module provides the paper trading execution layer that connects
-the AI strategy to Alpaca's paper trading API.
+the AI strategy to a broker via the broker abstraction layer.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
@@ -16,11 +15,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Optional
 
-from dotenv import load_dotenv
-
-from beavr.data.alpaca import AlpacaDataFetcher
-from beavr.db.cache import BarCache
-from beavr.db.connection import Database
+from beavr.broker.models import AccountInfo, BrokerPosition, OrderRequest, OrderResult
+from beavr.broker.protocols import BrokerProvider, MarketDataProvider, ScreenerProvider
 from beavr.models.signal import Signal
 from beavr.strategies.ai.multi_agent import MultiAgentParams, MultiAgentStrategy
 
@@ -49,50 +45,39 @@ class PaperTradingConfig:
 
 class PaperTradingRunner:
     """
-    Executes AI trading strategy against Alpaca paper trading account.
+    Executes AI trading strategy against a broker via the abstraction layer.
 
     Features:
-    - Connects to Alpaca paper trading API
+    - Broker-agnostic via BrokerProvider / MarketDataProvider protocols
     - Fetches real-time market data
     - Executes AI strategy decisions
     - Logs all decisions and trades
     - Handles order execution with proper error handling
     """
 
-    def __init__(self, config: Optional[PaperTradingConfig] = None) -> None:
-        """Initialize paper trading runner."""
-        load_dotenv()
+    def __init__(
+        self,
+        broker: BrokerProvider,
+        data_provider: MarketDataProvider,
+        config: Optional[PaperTradingConfig] = None,
+        screener: Optional[ScreenerProvider] = None,
+    ) -> None:
+        """Initialize paper trading runner.
 
+        Args:
+            broker: Broker provider for account/order operations.
+            data_provider: Market data provider for historical bars.
+            config: Paper trading configuration.
+            screener: Optional screener for market movers discovery.
+        """
         self.config = config or PaperTradingConfig()
-
-        # Get Alpaca credentials
-        self.api_key = os.environ.get("ALPACA_API_KEY")
-        self.api_secret = os.environ.get("ALPACA_API_SECRET")
-
-        if not self.api_key or not self.api_secret:
-            raise ValueError("ALPACA_API_KEY and ALPACA_API_SECRET must be set")
+        self.broker = broker
+        self.data_provider = data_provider
+        self.screener = screener
 
         # Set up logging directory
         self.log_dir = Path(self.config.log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
-
-        # Initialize Alpaca clients
-        self._init_alpaca_clients()
-
-        # Initialize market screener (optional)
-        self._screener = None
-        if self.config.use_market_movers:
-            from beavr.data.screener import MarketScreener
-            self._screener = MarketScreener(self.api_key, self.api_secret)
-
-        # Initialize data fetcher with cache
-        db = Database()
-        cache = BarCache(db)
-        self.data_fetcher = AlpacaDataFetcher(
-            api_key=self.api_key,
-            api_secret=self.api_secret,
-            cache=cache,
-        )
 
         # Determine symbols to trade
         self._trading_symbols = self._get_trading_symbols()
@@ -114,77 +99,59 @@ class PaperTradingRunner:
 
     def _get_trading_symbols(self) -> list[str]:
         """Get symbols to trade - either fixed or from market movers."""
-        if self._screener and self.config.use_market_movers:
+        if self.screener and self.config.use_market_movers:
             logger.info("Discovering tradeable symbols from market movers...")
-            movers = self._screener.get_tradeable_movers(
-                top_n=self.config.movers_count,
-                min_price=self.config.min_price,
-                max_price=self.config.max_price,
-            )
+            mover_list = self.screener.get_market_movers(top=self.config.movers_count)
+            # Filter by price range
+            movers = [
+                m["symbol"]
+                for m in mover_list
+                if "symbol" in m
+                and self.config.min_price <= float(m.get("price", 0)) <= self.config.max_price
+            ]
             # Always include SPY for market context
             if "SPY" not in movers:
                 movers = ["SPY"] + movers
             return movers
         return self.config.symbols
 
-    def _init_alpaca_clients(self) -> None:
-        """Initialize Alpaca trading and data clients."""
-        try:
-            from alpaca.trading.client import TradingClient
-            from alpaca.trading.enums import OrderSide, TimeInForce
-            from alpaca.trading.requests import MarketOrderRequest
-
-            self.trading_client = TradingClient(
-                self.api_key,
-                self.api_secret,
-                paper=True,  # Always paper for MVP
-            )
-
-            # Store enums for order creation
-            self._OrderSide = OrderSide
-            self._TimeInForce = TimeInForce
-            self._MarketOrderRequest = MarketOrderRequest
-
-            logger.info("Alpaca trading client initialized (paper mode)")
-
-        except ImportError as err:
-            raise ImportError("alpaca-py required. Install with: pip install alpaca-py") from err
-
     def get_account(self) -> dict[str, Any]:
         """Get current account state."""
-        account = self.trading_client.get_account()
+        account: AccountInfo = self.broker.get_account()
         return {
-            "cash": Decimal(account.cash),
-            "portfolio_value": Decimal(account.portfolio_value),
-            "buying_power": Decimal(account.buying_power),
-            "equity": Decimal(account.equity),
-            "last_equity": Decimal(account.last_equity),
-            "status": account.status,
+            "cash": account.cash,
+            "portfolio_value": account.equity,
+            "buying_power": account.buying_power,
+            "equity": account.equity,
+            "last_equity": account.equity,
+            "status": "active",
         }
 
     def get_positions(self) -> dict[str, Decimal]:
         """Get current positions."""
-        positions = self.trading_client.get_all_positions()
-        return {
-            p.symbol: Decimal(p.qty)
-            for p in positions
-        }
+        positions: list[BrokerPosition] = self.broker.get_positions()
+        return {p.symbol: p.qty for p in positions}
 
     def get_position_details(self) -> list[dict[str, Any]]:
         """Get detailed position information."""
-        positions = self.trading_client.get_all_positions()
-        return [
-            {
+        positions: list[BrokerPosition] = self.broker.get_positions()
+        details: list[dict[str, Any]] = []
+        for p in positions:
+            current_price = p.market_value / p.qty if p.qty else Decimal("0")
+            cost_basis = p.avg_cost * p.qty if p.qty else Decimal("0")
+            unrealized_plpc = (
+                float(p.unrealized_pl / cost_basis) if cost_basis else 0.0
+            )
+            details.append({
                 "symbol": p.symbol,
-                "qty": Decimal(p.qty),
-                "market_value": Decimal(p.market_value),
-                "avg_entry_price": Decimal(p.avg_entry_price),
-                "current_price": Decimal(p.current_price),
-                "unrealized_pl": Decimal(p.unrealized_pl),
-                "unrealized_plpc": float(p.unrealized_plpc),
-            }
-            for p in positions
-        ]
+                "qty": p.qty,
+                "market_value": p.market_value,
+                "avg_entry_price": p.avg_cost,
+                "current_price": current_price,
+                "unrealized_pl": p.unrealized_pl,
+                "unrealized_plpc": unrealized_plpc,
+            })
+        return details
 
     def run_cycle(self) -> dict[str, Any]:
         """
@@ -241,11 +208,11 @@ class PaperTradingRunner:
             today = date.today()
             start_date = today - timedelta(days=90)  # Get 90 days of history
 
-            bars = self.data_fetcher.get_multi_bars(
+            bars = self.data_provider.get_bars_multi(
                 symbols=self._trading_symbols,
                 start=start_date,
                 end=today,
-                timeframe="1Day",
+                timeframe="1day",
             )
 
             # Get current prices
@@ -330,7 +297,7 @@ class PaperTradingRunner:
         self, signal: Signal, prices: dict[str, Decimal]
     ) -> dict[str, Any]:
         """
-        Execute a trading signal via Alpaca.
+        Execute a trading signal via the broker.
 
         Args:
             signal: Trading signal
@@ -347,39 +314,41 @@ class PaperTradingRunner:
             if not price:
                 raise ValueError(f"No price for {signal.symbol}")
 
-            qty = float(signal.amount / price)
-            qty = round(qty, 4)  # Round to 4 decimals
+            qty = signal.amount / price
+            qty = qty.quantize(Decimal("0.0001"))  # Round to 4 decimals
 
-            if qty < 0.001:
+            if qty < Decimal("0.001"):
                 raise ValueError(f"Quantity too small: {qty}")
 
-            order_request = self._MarketOrderRequest(
+            order_req = OrderRequest(
                 symbol=signal.symbol,
-                qty=qty,
-                side=self._OrderSide.BUY,
-                time_in_force=self._TimeInForce.DAY,
+                quantity=qty,
+                side="buy",
+                order_type="market",
+                tif="day",
             )
 
         elif signal.action == "sell" and signal.quantity:
-            order_request = self._MarketOrderRequest(
+            order_req = OrderRequest(
                 symbol=signal.symbol,
-                qty=float(signal.quantity),
-                side=self._OrderSide.SELL,
-                time_in_force=self._TimeInForce.DAY,
+                quantity=signal.quantity,
+                side="sell",
+                order_type="market",
+                tif="day",
             )
 
         else:
             raise ValueError(f"Invalid signal: {signal}")
 
         # Submit order
-        order = self.trading_client.submit_order(order_request)
+        order: OrderResult = self.broker.submit_order(order_req)
 
         result = {
-            "order_id": order.id,
+            "order_id": order.order_id,
             "symbol": order.symbol,
-            "side": order.side.value,
-            "qty": str(order.qty),
-            "status": order.status.value,
+            "side": order.side,
+            "qty": str(order.filled_qty),
+            "status": order.status,
             "submitted_at": order.submitted_at.isoformat() if order.submitted_at else None,
             "signal_reason": signal.reason,
         }
@@ -427,7 +396,7 @@ class PaperTradingRunner:
         while True:
             try:
                 # Check if market is open
-                clock = self.trading_client.get_clock()
+                clock = self.broker.get_clock()
 
                 if clock.is_open:
                     # Run if we haven't run today or interval has passed
@@ -497,81 +466,19 @@ def setup_logging(log_level: str = "INFO", log_file: Optional[str] = None) -> No
 
 
 def main() -> None:
-    """Main entry point for paper trading."""
-    import argparse
+    """Main entry point for paper trading.
 
-    parser = argparse.ArgumentParser(description="AI Investor Paper Trading")
-    parser.add_argument(
-        "--once",
-        action="store_true",
-        help="Run single cycle instead of continuous",
+    .. deprecated::
+        Direct script execution is no longer supported after the broker
+        abstraction migration.  Use the ``bvr ai run`` CLI command instead,
+        which properly injects broker and data-provider instances via
+        ``BrokerFactory``.
+    """
+    raise RuntimeError(
+        "Direct paper_trading.py execution is no longer supported. "
+        "Use 'bvr ai run' CLI command instead, or construct "
+        "PaperTradingRunner with broker/data_provider arguments."
     )
-    parser.add_argument(
-        "--symbols",
-        nargs="+",
-        default=["SPY", "QQQ", "AAPL", "MSFT", "GOOGL"],
-        help="Symbols to trade",
-    )
-    parser.add_argument(
-        "--log-level",
-        default="INFO",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Logging level",
-    )
-    parser.add_argument(
-        "--log-dir",
-        default="logs/ai_investor",
-        help="Directory for log files",
-    )
-    parser.add_argument(
-        "--model",
-        default="gpt-4o-mini",
-        help="OpenAI model to use",
-    )
-
-    args = parser.parse_args()
-
-    # Set up logging
-    log_file = Path(args.log_dir) / "paper_trading.log"
-    setup_logging(args.log_level, str(log_file))
-
-    logger.info("AI Investor Paper Trading")
-    logger.info(f"Symbols: {args.symbols}")
-    logger.info(f"Model: {args.model}")
-
-    # Create config
-    config = PaperTradingConfig(
-        symbols=args.symbols,
-        log_dir=args.log_dir,
-        llm_model=args.model,
-    )
-
-    # Create runner
-    runner = PaperTradingRunner(config)
-
-    # Show account info
-    account = runner.get_account()
-    logger.info(f"Account Status: {account['status']}")
-    logger.info(f"Cash: ${account['cash']:,.2f}")
-    logger.info(f"Portfolio Value: ${account['portfolio_value']:,.2f}")
-
-    positions = runner.get_position_details()
-    if positions:
-        logger.info("Current Positions:")
-        for p in positions:
-            logger.info(
-                f"  {p['symbol']}: {p['qty']} shares @ ${p['current_price']:.2f} "
-                f"(P/L: ${p['unrealized_pl']:.2f}, {p['unrealized_plpc']:.1%})"
-            )
-    else:
-        logger.info("No current positions")
-
-    # Run
-    if args.once:
-        result = runner.run_cycle()
-        print(json.dumps(result, indent=2, default=str))
-    else:
-        runner.run_continuous()
 
 
 if __name__ == "__main__":

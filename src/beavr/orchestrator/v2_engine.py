@@ -27,6 +27,8 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, Field
 
 from beavr.agents.base import AgentContext
+from beavr.broker.models import OrderRequest
+from beavr.broker.protocols import BrokerProvider, MarketDataProvider, NewsProvider, ScreenerProvider
 from beavr.models.dd_report import DDRecommendation
 from beavr.models.market_event import EventImportance, EventType, MarketEvent
 from beavr.models.thesis import ThesisStatus, TradeThesis, TradeType
@@ -59,16 +61,11 @@ class CompanyNameCache:
     Cache for mapping symbols to company names.
     
     Used to detect related symbols (e.g., GOOG/GOOGL are both Alphabet).
-    Fetches company names from Alpaca API and caches them.
+    Uses a simple cache; callers may populate it externally.
     """
     
     def __init__(self) -> None:
         self._cache: dict[str, str] = {}
-        self._trading_client: Any = None
-    
-    def set_trading_client(self, client: Any) -> None:
-        """Set the Alpaca trading client for API lookups."""
-        self._trading_client = client
     
     def _normalize_company_name(self, name: str) -> str:
         """
@@ -107,33 +104,20 @@ class CompanyNameCache:
         
         return name
     
+    def set_name(self, symbol: str, name: str) -> None:
+        """Manually set a company name for a symbol."""
+        self._cache[symbol] = self._normalize_company_name(name)
+    
     def get_company_name(self, symbol: str) -> str:
         """
         Get the normalized company name for a symbol.
         
-        Uses cache if available, otherwise fetches from Alpaca API.
+        Returns cached name if available, otherwise returns the symbol itself.
         """
         if symbol in self._cache:
             return self._cache[symbol]
         
-        if not self._trading_client:
-            # No client - can't look up, return symbol as-is
-            return symbol
-        
-        try:
-            from alpaca.trading.requests import GetAssetsRequest
-            from alpaca.trading.enums import AssetClass
-            
-            # Try to get the asset info
-            asset = self._trading_client.get_asset(symbol)
-            if asset and asset.name:
-                normalized = self._normalize_company_name(asset.name)
-                self._cache[symbol] = normalized
-                return normalized
-        except Exception:
-            # API error - just return symbol
-            pass
-        
+        # No broker-specific lookup; return symbol as fallback
         self._cache[symbol] = symbol
         return symbol
     
@@ -324,24 +308,31 @@ class V2AutonomousOrchestrator:
         self._running = False
         self._shutdown_requested = False
         
-        # Trading client (set externally)
-        self._trading_client = None
-        self._data_client = None
+        # Broker abstraction (set externally via set_trading_client)
+        self._broker: Optional[BrokerProvider] = None
+        self._data_provider: Optional[MarketDataProvider] = None
         
         # Context builder (set externally)
         self._ctx_builder = None
 
-        # Lazy data utilities
-        self._market_screener = None
-        self._news_scanner = None
+        # Protocol-based data utilities (set externally or via set_providers)
+        self._screener: Optional[ScreenerProvider] = None
+        self._news_provider: Optional[NewsProvider] = None
     
-    def set_trading_client(self, trading_client, data_client) -> None:
-        """Set the Alpaca trading and data clients."""
-        self._trading_client = trading_client
-        self._data_client = data_client
-        
-        # Initialize the company cache for related symbol detection
-        _company_cache.set_trading_client(trading_client)
+    def set_trading_client(
+        self,
+        broker: BrokerProvider,
+        data_provider: MarketDataProvider,
+        screener: Optional[ScreenerProvider] = None,
+        news_provider: Optional[NewsProvider] = None,
+    ) -> None:
+        """Set the broker, data, screener, and news providers."""
+        self._broker = broker
+        self._data_provider = data_provider
+        if screener is not None:
+            self._screener = screener
+        if news_provider is not None:
+            self._news_provider = news_provider
     
     def set_context_builder(self, builder) -> None:
         """Set the function to build AgentContext for symbols."""
@@ -447,7 +438,7 @@ class V2AutonomousOrchestrator:
         Check if we already have a position in this symbol or a related symbol.
         
         For example, GOOG and GOOGL are both Alphabet - we should only hold one.
-        Uses Alpaca API to dynamically lookup company names.
+        Uses company name cache to dynamically detect related symbols.
         """
         # Check active swing trades
         for held in self.state.active_swing_trades:
@@ -455,11 +446,7 @@ class V2AutonomousOrchestrator:
                 return True
         
         # Check active day trades
-        for held in self.state.active_day_trades:
-            if symbols_are_related(symbol, held):
-                return True
-        
-        return False
+        return any(symbols_are_related(symbol, held) for held in self.state.active_day_trades)
     
     def _is_related_to_any(self, symbol: str, symbols: set[str]) -> Optional[str]:
         """
@@ -563,45 +550,13 @@ class V2AutonomousOrchestrator:
             events=[],
         )
 
-    def _get_market_screener(self):
-        """Lazy-load the market screener."""
-        if self._market_screener is not None:
-            return self._market_screener
+    def _get_market_screener(self) -> Optional[ScreenerProvider]:
+        """Return the configured screener provider, if any."""
+        return self._screener
 
-        try:
-            from beavr.core.config import get_settings
-            from beavr.data.screener import MarketScreener
-
-            settings = get_settings()
-            self._market_screener = MarketScreener(
-                settings.alpaca_api_key,
-                settings.alpaca_api_secret,
-            )
-        except Exception as e:
-            logger.warning(f"Market screener unavailable: {e}")
-            self._market_screener = None
-
-        return self._market_screener
-
-    def _get_news_scanner(self):
-        """Lazy-load the news scanner."""
-        if self._news_scanner is not None:
-            return self._news_scanner
-
-        try:
-            from beavr.core.config import get_settings
-            from beavr.data.screener import NewsScanner
-
-            settings = get_settings()
-            self._news_scanner = NewsScanner(
-                settings.alpaca_api_key,
-                settings.alpaca_api_secret,
-            )
-        except Exception as e:
-            logger.warning(f"News scanner unavailable: {e}")
-            self._news_scanner = None
-
-        return self._news_scanner
+    def _get_news_scanner(self) -> Optional[NewsProvider]:
+        """Return the configured news provider, if any."""
+        return self._news_provider
 
     def _fetch_market_mover_events(self) -> list[MarketEvent]:
         """Fetch market mover symbols and convert to synthetic events."""
@@ -610,10 +565,10 @@ class V2AutonomousOrchestrator:
             return []
 
         max_retries = 3
-        movers = None
+        movers: Optional[list[dict]] = None
         for attempt in range(max_retries):
             try:
-                movers = screener.get_market_movers(top_n=self.config.market_movers_limit)
+                movers = screener.get_market_movers(top=self.config.market_movers_limit)
                 break
             except Exception as e:
                 if attempt < max_retries - 1:
@@ -629,44 +584,55 @@ class V2AutonomousOrchestrator:
 
         events: list[MarketEvent] = []
 
-        for mover in movers.top_gainers:
-            events.append(
-                MarketEvent(
-                    event_type=EventType.NEWS_CATALYST,
-                    symbol=mover.symbol,
-                    headline=f"Top gainer: {mover.symbol}",
-                    summary=f"{mover.symbol} up {mover.percent_change:+.1f}% as a top gainer",
-                    source="market_movers",
-                    timestamp=datetime.now(),
-                    importance=EventImportance.MEDIUM,
+        for mover in movers:
+            symbol = mover.get("symbol", "")
+            change_pct = float(mover.get("change_pct", mover.get("percent_change", 0)))
+            if not symbol:
+                continue
+            if change_pct >= 0:
+                events.append(
+                    MarketEvent(
+                        event_type=EventType.NEWS_CATALYST,
+                        symbol=symbol,
+                        headline=f"Top gainer: {symbol}",
+                        summary=f"{symbol} up {change_pct:+.1f}% as a top gainer",
+                        source="market_movers",
+                        timestamp=datetime.now(),
+                        importance=EventImportance.MEDIUM,
+                    )
                 )
-            )
+            else:
+                events.append(
+                    MarketEvent(
+                        event_type=EventType.NEWS_CATALYST,
+                        symbol=symbol,
+                        headline=f"Top loser: {symbol}",
+                        summary=f"{symbol} down {change_pct:+.1f}% as a top loser",
+                        source="market_movers",
+                        timestamp=datetime.now(),
+                        importance=EventImportance.MEDIUM,
+                    )
+                )
 
-        for mover in movers.top_losers:
-            events.append(
-                MarketEvent(
-                    event_type=EventType.NEWS_CATALYST,
-                    symbol=mover.symbol,
-                    headline=f"Top loser: {mover.symbol}",
-                    summary=f"{mover.symbol} down {mover.percent_change:+.1f}% as a top loser",
-                    source="market_movers",
-                    timestamp=datetime.now(),
-                    importance=EventImportance.MEDIUM,
-                )
-            )
-
-        for mover in movers.most_active:
-            events.append(
-                MarketEvent(
-                    event_type=EventType.OTHER,
-                    symbol=mover.symbol,
-                    headline=f"Most active: {mover.symbol}",
-                    summary=f"{mover.symbol} is among the most active by volume",
-                    source="market_movers",
-                    timestamp=datetime.now(),
-                    importance=EventImportance.MEDIUM,
-                )
-            )
+        # Fetch most actives separately via protocol
+        try:
+            actives = screener.get_most_actives(top=self.config.market_movers_limit)
+            for active in actives:
+                active_symbol = active.get("symbol", "")
+                if active_symbol:
+                    events.append(
+                        MarketEvent(
+                            event_type=EventType.OTHER,
+                            symbol=active_symbol,
+                            headline=f"Most active: {active_symbol}",
+                            summary=f"{active_symbol} is among the most active by volume",
+                            source="market_movers",
+                            timestamp=datetime.now(),
+                            importance=EventImportance.MEDIUM,
+                        )
+                    )
+        except Exception as e:
+            logger.warning(f"Most actives fetch failed: {e}")
 
         return events
 
@@ -692,16 +658,17 @@ class V2AutonomousOrchestrator:
 
     def _fetch_news_items(self, symbols: list[str]) -> list[dict[str, Any]]:
         """Fetch raw news items for the provided symbols with retry logic."""
-        scanner = self._get_news_scanner()
-        if not scanner:
+        news_provider = self._get_news_scanner()
+        if not news_provider:
             return []
 
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                if symbols:
-                    return scanner.get_news(symbols=symbols, limit=self.config.news_limit)
-                return scanner.get_news(limit=self.config.news_limit)
+                return news_provider.get_news(
+                    symbols=symbols if symbols else [],
+                    limit=self.config.news_limit,
+                )
             except Exception as e:
                 if attempt < max_retries - 1:
                     wait_time = 2 ** attempt  # 1s, 2s, 4s
@@ -1324,15 +1291,15 @@ class V2AutonomousOrchestrator:
     
     def _execute_trade(self, thesis: TradeThesis, is_day_trade: bool = False) -> bool:
         """Execute a trade based on an approved thesis."""
-        if not self._trading_client:
-            logger.warning("Trading client not configured")
+        if not self._broker:
+            logger.warning("Broker not configured")
             return False
         
         logger.info(f"\n💰 Executing {'DAY TRADE' if is_day_trade else 'SWING'}: {thesis.symbol}")
         
         try:
             # Get current portfolio value
-            account = self._trading_client.get_account()
+            account = self._broker.get_account()
             portfolio_value = Decimal(str(account.equity))
             cash = Decimal(str(account.cash))
             
@@ -1369,20 +1336,18 @@ class V2AutonomousOrchestrator:
             logger.info(f"   Target: ${thesis.profit_target:.2f} (+{thesis.target_pct:.1f}%)")
             logger.info(f"   Stop: ${thesis.stop_loss:.2f} (-{thesis.stop_pct:.1f}%)")
             
-            # Execute order via Alpaca
-            from alpaca.trading.enums import OrderSide, TimeInForce
-            from alpaca.trading.requests import MarketOrderRequest
-            
-            order_request = MarketOrderRequest(
+            # Execute order via broker abstraction
+            order_request = OrderRequest(
                 symbol=thesis.symbol,
-                notional=round(float(position_value), 2),  # Alpaca requires 2 decimal places
-                side=OrderSide.BUY,
-                time_in_force=TimeInForce.DAY,
+                notional=Decimal(str(round(float(position_value), 2))),
+                side="buy",
+                order_type="market",
+                tif="day",
             )
             
-            order = self._trading_client.submit_order(order_request)
+            order = self._broker.submit_order(order_request)
             
-            logger.info(f"   ✅ Order submitted: {order.id}")
+            logger.info(f"   ✅ Order submitted: {order.order_id}")
             
             # Track position in DB
             if self.positions_repo:
@@ -1424,11 +1389,11 @@ class V2AutonomousOrchestrator:
         - Day trade deadline (10:30 AM)
         - Thesis invalidation
         """
-        if not self._trading_client:
+        if not self._broker:
             return
         
         try:
-            positions = self._trading_client.get_all_positions()
+            positions = self._broker.get_positions()
             
             if not positions:
                 logger.debug("No open positions")
@@ -1443,7 +1408,13 @@ class V2AutonomousOrchestrator:
             
             for pos in positions:
                 symbol = pos.symbol
-                pnl_pct = float(pos.unrealized_plpc) * 100
+                # Compute unrealized P&L percentage from BrokerPosition fields
+                cost_basis = pos.avg_cost * pos.qty
+                pnl_pct = (
+                    float(pos.unrealized_pl / cost_basis) * 100
+                    if cost_basis > 0
+                    else 0.0
+                )
                 
                 # Get position-specific targets from DB
                 db_pos = None
@@ -1483,12 +1454,29 @@ class V2AutonomousOrchestrator:
             logger.error(f"Position monitoring error: {e}")
     
     def _close_position(self, symbol: str, reason: str, pnl_pct: float) -> None:
-        """Close a position."""
-        if not self._trading_client:
+        """Close a position by selling all shares."""
+        if not self._broker:
             return
         
         try:
-            self._trading_client.close_position(symbol)
+            # Find position and compute exit price before selling
+            positions = self._broker.get_positions()
+            pos = next((p for p in positions if p.symbol == symbol), None)
+            exit_price = (
+                float(pos.market_value / pos.qty) if pos and pos.qty > 0 else 0.0
+            )
+            
+            if pos and pos.qty > 0:
+                self._broker.submit_order(
+                    OrderRequest(
+                        symbol=symbol,
+                        quantity=pos.qty,
+                        side="sell",
+                        order_type="market",
+                        tif="day",
+                    )
+                )
+            
             logger.info(f"✅ Closed {symbol} ({reason}): {pnl_pct:+.1f}%")
             
             # Update state
@@ -1507,13 +1495,6 @@ class V2AutonomousOrchestrator:
             if self.positions_repo:
                 db_pos = self.positions_repo.get_open_position(symbol)
                 if db_pos:
-                    # Get current price for close
-                    positions = self._trading_client.get_all_positions()
-                    exit_price = 0
-                    for p in positions:
-                        if p.symbol == symbol:
-                            exit_price = float(p.current_price)
-                            break
                     self.positions_repo.close_position(db_pos.id, exit_price, reason)
             
             self._save_state()
@@ -1619,7 +1600,7 @@ class V2AutonomousOrchestrator:
                     # Heartbeat log
                     approved = self._get_approved_theses()
                     day_trades = [t for t in approved if t.trade_type == TradeType.DAY_TRADE]
-                    positions = self._trading_client.get_all_positions() if self._trading_client else []
+                    positions = self._broker.get_positions() if self._broker else []
                     open_symbols = [pos.symbol for pos in positions] if positions else []
                     pending_dd = self._get_pending_dd_candidates()
                     research_mode = self._is_research_mode(
@@ -1649,7 +1630,7 @@ class V2AutonomousOrchestrator:
                 elif current_phase == OrchestratorPhase.MARKET_HOURS:
                     # Heartbeat log
                     approved = self._get_approved_theses()
-                    positions = self._trading_client.get_all_positions() if self._trading_client else []
+                    positions = self._broker.get_positions() if self._broker else []
                     open_symbols = [pos.symbol for pos in positions] if positions else []
                     pending_dd = self._get_pending_dd_candidates()
                     research_mode = self._is_research_mode(

@@ -20,6 +20,8 @@ Stop/Target Tracking:
       server-side stop/target execution.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import time
@@ -35,11 +37,14 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
+from beavr.broker.factory import BrokerFactory
+from beavr.broker.models import OrderRequest
 from beavr.core.config import get_settings
 from beavr.db import AIPositionsRepository, Database
 
 if TYPE_CHECKING:
     from beavr.agents.base import AgentContext
+    from beavr.broker.protocols import BrokerProvider, MarketDataProvider, ScreenerProvider
 
 # US Eastern timezone for market hours
 ET = ZoneInfo("America/New_York")
@@ -128,11 +133,10 @@ class AIInvestor:
 
     def __init__(self):
         """Initialize the AI investor."""
-        self._trading = None
-        self._data = None
+        self._broker: BrokerProvider | None = None
+        self._data_provider: MarketDataProvider | None = None
         self._llm = None
-        self._screener = None
-        self._fetcher = None
+        self._screener: ScreenerProvider | None = None
         self._db = None
         self._positions_repo = None
 
@@ -151,29 +155,18 @@ class AIInvestor:
         return self._positions_repo
 
     @property
-    def trading(self):
-        """Lazy load trading client."""
-        if self._trading is None:
-            from alpaca.trading.client import TradingClient
-            settings = get_settings()
-            self._trading = TradingClient(
-                settings.alpaca_api_key,
-                settings.alpaca_api_secret,
-                paper=True,
-            )
-        return self._trading
+    def broker(self) -> BrokerProvider:
+        """Lazy load broker provider."""
+        if self._broker is None:
+            self._broker = BrokerFactory.create_broker(get_settings())
+        return self._broker
 
     @property
-    def data(self):
-        """Lazy load data client."""
-        if self._data is None:
-            from alpaca.data.historical.stock import StockHistoricalDataClient
-            settings = get_settings()
-            self._data = StockHistoricalDataClient(
-                settings.alpaca_api_key,
-                settings.alpaca_api_secret,
-            )
-        return self._data
+    def data_provider(self) -> MarketDataProvider:
+        """Lazy load market data provider."""
+        if self._data_provider is None:
+            self._data_provider = BrokerFactory.create_data_provider(get_settings())
+        return self._data_provider
 
     @property
     def llm(self):
@@ -184,46 +177,32 @@ class AIInvestor:
         return self._llm
 
     @property
-    def screener(self):
+    def screener(self) -> ScreenerProvider:
         """Lazy load market screener."""
         if self._screener is None:
-            from beavr.data.screener import MarketScreener
-            settings = get_settings()
-            self._screener = MarketScreener(
-                settings.alpaca_api_key,
-                settings.alpaca_api_secret,
-            )
+            screener = BrokerFactory.create_screener(get_settings())
+            if screener is None:
+                raise RuntimeError("Screener unavailable \u2014 check broker credentials")
+            self._screener = screener
         return self._screener
-
-    @property
-    def fetcher(self):
-        """Lazy load data fetcher."""
-        if self._fetcher is None:
-            from beavr.data.alpaca import AlpacaDataFetcher
-            settings = get_settings()
-            self._fetcher = AlpacaDataFetcher(
-                settings.alpaca_api_key,
-                settings.alpaca_api_secret,
-            )
-        return self._fetcher
 
     def get_account(self) -> dict:
         """Get account status."""
-        account = self.trading.get_account()
-        positions = self.trading.get_all_positions()
+        account = self.broker.get_account()
+        positions = self.broker.get_positions()
 
         return {
-            "equity": Decimal(account.equity),
-            "cash": Decimal(account.cash),
-            "buying_power": Decimal(account.buying_power),
+            "equity": account.equity,
+            "cash": account.cash,
+            "buying_power": account.buying_power,
             "positions": {
                 p.symbol: {
-                    "qty": Decimal(p.qty),
-                    "avg_entry": Decimal(p.avg_entry_price),
-                    "current_price": Decimal(p.current_price),
-                    "market_value": Decimal(p.market_value),
-                    "pnl": Decimal(p.unrealized_pl),
-                    "pnl_pct": float(p.unrealized_plpc) * 100,
+                    "qty": p.qty,
+                    "avg_entry": p.avg_cost,
+                    "current_price": (p.market_value / p.qty) if p.qty else Decimal(0),
+                    "market_value": p.market_value,
+                    "pnl": p.unrealized_pl,
+                    "pnl_pct": float(p.unrealized_pl / (p.avg_cost * p.qty) * 100) if p.avg_cost and p.qty else 0.0,
                 }
                 for p in positions
             }
@@ -231,30 +210,18 @@ class AIInvestor:
 
     def get_quality_opportunities(self) -> list[dict]:
         """Get market movers filtered for quality."""
-        result = self.screener.get_market_movers(top_n=20)
+        movers = self.screener.get_market_movers(top=20)
 
         opportunities = []
-
-        # Filter gainers
-        for m in result.top_gainers:
-            if is_quality_stock(m.symbol, float(m.price)):
+        for m in movers:
+            price = float(m.get("price", 0))
+            if is_quality_stock(m["symbol"], price):
                 opportunities.append({
-                    "symbol": m.symbol,
-                    "price": float(m.price),
-                    "change_pct": m.percent_change,
-                    "type": "gainer",
-                    "in_universe": m.symbol in QUALITY_UNIVERSE,
-                })
-
-        # Filter losers (potential bounces)
-        for m in result.top_losers:
-            if is_quality_stock(m.symbol, float(m.price)):
-                opportunities.append({
-                    "symbol": m.symbol,
-                    "price": float(m.price),
-                    "change_pct": m.percent_change,
-                    "type": "loser",
-                    "in_universe": m.symbol in QUALITY_UNIVERSE,
+                    "symbol": m["symbol"],
+                    "price": price,
+                    "change_pct": m.get("percent_change", 0.0),
+                    "type": m.get("type", "gainer"),
+                    "in_universe": m["symbol"] in QUALITY_UNIVERSE,
                 })
 
         # Sort to prioritize quality universe stocks
@@ -265,7 +232,7 @@ class AIInvestor:
     def get_technical_indicators(self, symbol: str) -> Optional[dict]:
         """Calculate technical indicators for a symbol."""
         try:
-            bars = self.fetcher.get_bars(
+            bars = self.data_provider.get_bars(
                 symbol,
                 date.today() - timedelta(days=60),
                 date.today(),
@@ -408,12 +375,9 @@ Be decisive - we want to deploy this capital."""
 
     def execute_buy(self, symbol: str, amount: Decimal, test_mode: bool = False) -> bool:
         """Execute a buy order."""
-        from alpaca.trading.enums import OrderSide, TimeInForce
-        from alpaca.trading.requests import MarketOrderRequest
-
         try:
             # Get current price
-            bars = self.fetcher.get_bars(symbol, date.today() - timedelta(days=5), date.today())
+            bars = self.data_provider.get_bars(symbol, date.today() - timedelta(days=5), date.today())
             if bars.empty:
                 return False
 
@@ -426,12 +390,13 @@ Be decisive - we want to deploy this capital."""
 
             # Try fractional first
             try:
-                self.trading.submit_order(
-                    MarketOrderRequest(
+                self.broker.submit_order(
+                    OrderRequest(
                         symbol=symbol,
-                        qty=round(qty, 4),
-                        side=OrderSide.BUY,
-                        time_in_force=TimeInForce.DAY,
+                        quantity=Decimal(str(round(qty, 4))),
+                        side="buy",
+                        order_type="market",
+                        tif="day",
                     )
                 )
                 console.print(f"  [green]✅ BUY[/green] {qty:.4f} {symbol} @ ~${price:.2f} = ${amount:.2f}")
@@ -440,12 +405,13 @@ Be decisive - we want to deploy this capital."""
                 if "not fractionable" in str(e):
                     whole_qty = int(qty)
                     if whole_qty >= 1:
-                        self.trading.submit_order(
-                            MarketOrderRequest(
+                        self.broker.submit_order(
+                            OrderRequest(
                                 symbol=symbol,
-                                qty=whole_qty,
-                                side=OrderSide.BUY,
-                                time_in_force=TimeInForce.DAY,
+                                quantity=Decimal(str(whole_qty)),
+                                side="buy",
+                                order_type="market",
+                                tif="day",
                             )
                         )
                         actual = Decimal(whole_qty) * price
@@ -461,20 +427,18 @@ Be decisive - we want to deploy this capital."""
 
     def execute_sell(self, symbol: str, qty: Decimal, test_mode: bool = False) -> bool:
         """Execute a sell order."""
-        from alpaca.trading.enums import OrderSide, TimeInForce
-        from alpaca.trading.requests import MarketOrderRequest
-
         try:
             if test_mode:
                 console.print(f"  [yellow][TEST][/yellow] Would SELL {qty} {symbol}")
                 return True
 
-            self.trading.submit_order(
-                MarketOrderRequest(
+            self.broker.submit_order(
+                OrderRequest(
                     symbol=symbol,
-                    qty=float(qty),
-                    side=OrderSide.SELL,
-                    time_in_force=TimeInForce.DAY,
+                    quantity=qty,
+                    side="sell",
+                    order_type="market",
+                    tif="day",
                 )
             )
             console.print(f"  [green]✅ SOLD[/green] {qty} {symbol}")
@@ -1009,8 +973,8 @@ def _setup_auto_logging(log_file: Path) -> None:
 
 
 def _get_market_status(investor: AIInvestor) -> dict:
-    """Get current market status from Alpaca."""
-    clock = investor.trading.get_clock()
+    """Get current market status."""
+    clock = investor.broker.get_clock()
     now_et = datetime.now(ET)
 
     return {
@@ -1335,7 +1299,7 @@ def auto(
 # =============================================================================
 
 
-def _build_agent_context_for_symbols(investor: AIInvestor, symbols: list[str]) -> "AgentContext":
+def _build_agent_context_for_symbols(investor: AIInvestor, symbols: list[str]) -> AgentContext:
     """Build a minimal AgentContext for one or more symbols.
 
     This is used by v2 CLI commands (thesis/DD) so they can call the
@@ -1361,7 +1325,7 @@ def _build_agent_context_for_symbols(investor: AIInvestor, symbols: list[str]) -
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                df = investor.fetcher.get_bars(symbol_u, start, end)
+                df = investor.data_provider.get_bars(symbol_u, start, end)
                 break  # Success
             except (ConnectionError, ConnectionResetError, OSError) as e:
                 if attempt < max_retries - 1:
@@ -1961,7 +1925,7 @@ def auto_v2(
 
     # Set trading clients (unless test mode)
     if not test:
-        orchestrator.set_trading_client(investor.trading, investor.data)
+        orchestrator.set_trading_client(investor.broker, investor.data_provider)
     
     # Set context builder
     orchestrator.set_context_builder(

@@ -83,9 +83,8 @@ def run_backtest(
 ) -> None:
     """Run a backtest for a strategy."""
     from beavr.backtest.engine import BacktestEngine
+    from beavr.broker.factory import BrokerFactory
     from beavr.core.config import load_app_config
-    from beavr.data.alpaca import AlpacaDataFetcher
-    from beavr.db.cache import BarCache
     from beavr.db.connection import Database
     from beavr.db.results import BacktestResultsRepository
     from beavr.strategies.registry import create_strategy, get_strategy
@@ -134,21 +133,15 @@ def run_backtest(
         console.print(f"[red]Error creating strategy: {e}[/red]")
         raise typer.Exit(1) from e
 
-    # Get API credentials and app config
-    api_key, api_secret = _get_alpaca_credentials()
+    # Get app config
     app_config = load_app_config()
     app_config.ensure_data_dir()
 
     # Set up dependencies
     db = Database(app_config.database_path)
-    cache = BarCache(db)
 
-    # Create data fetcher
-    data_fetcher = AlpacaDataFetcher(
-        api_key=api_key,
-        api_secret=api_secret,
-        cache=cache,
-    )
+    # Create data provider via factory
+    data_fetcher = BrokerFactory.create_data_provider(app_config)
 
     # Results repository
     results_repo = BacktestResultsRepository(db) if save else None
@@ -194,10 +187,8 @@ def compare_strategies(
 ) -> None:
     """Compare multiple strategies."""
     from beavr.backtest.engine import BacktestEngine
+    from beavr.broker.factory import BrokerFactory
     from beavr.core.config import load_app_config
-    from beavr.data.alpaca import AlpacaDataFetcher
-    from beavr.db.cache import BarCache
-    from beavr.db.connection import Database
     from beavr.strategies.registry import create_strategy, get_strategy
 
     # Parse inputs
@@ -218,20 +209,11 @@ def compare_strategies(
             console.print(f"[red]Error: {e}[/red]")
             raise typer.Exit(1) from e
 
-    # Get API credentials and app config
-    api_key, api_secret = _get_alpaca_credentials()
+    # Get app config
     app_config = load_app_config()
     app_config.ensure_data_dir()
 
-    # Set up dependencies
-    db = Database(app_config.database_path)
-    cache = BarCache(db)
-
-    data_fetcher = AlpacaDataFetcher(
-        api_key=api_key,
-        api_secret=api_secret,
-        cache=cache,
-    )
+    data_fetcher = BrokerFactory.create_data_provider(app_config)
 
     results = []
 

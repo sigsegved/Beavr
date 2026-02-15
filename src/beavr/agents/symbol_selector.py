@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from beavr.agents.base import AgentContext, AgentProposal, BaseAgent
 
 if TYPE_CHECKING:
-    from beavr.data.screener import MarketScreener, NewsScanner
+    from beavr.broker.protocols import NewsProvider, ScreenerProvider
     from beavr.llm.client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -61,8 +61,8 @@ class SymbolSelectorAgent(BaseAgent):
     def __init__(
         self,
         llm: LLMClient,
-        screener: Optional[MarketScreener] = None,
-        news_scanner: Optional[NewsScanner] = None,
+        screener: Optional[ScreenerProvider] = None,
+        news_scanner: Optional[NewsProvider] = None,
     ) -> None:
         """Initialize with LLM and optional data sources."""
         super().__init__(llm)
