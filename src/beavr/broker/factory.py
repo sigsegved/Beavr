@@ -130,13 +130,12 @@ class BrokerFactory:
                     message="Webull credentials needed for data",
                     broker_name="webull",
                 )
+            from webullsdkcore.client import ApiClient
+
             from beavr.broker.webull.data import WebullMarketData
 
-            return WebullMarketData(
-                app_key=app_key,
-                app_secret=app_secret,
-                region=webull_cfg.region,
-            )
+            api_client = ApiClient(app_key, app_secret, region_id=webull_cfg.region)
+            return WebullMarketData(api_client=api_client)
         else:
             raise BrokerError(
                 error_code="unsupported_provider",
