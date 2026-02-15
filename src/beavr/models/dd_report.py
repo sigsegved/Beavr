@@ -130,10 +130,13 @@ class DueDiligenceReport(BaseModel):
     )
     
     # Trade Type Classification (NEW in v2)
-    recommended_trade_type: RecommendedTradeType = Field(
+    # Optional for backward compatibility with old DD reports
+    recommended_trade_type: Optional[RecommendedTradeType] = Field(
+        default=None,
         description="DD Agent's recommended trade type",
     )
-    trade_type_rationale: str = Field(
+    trade_type_rationale: Optional[str] = Field(
+        default=None,
         description="Why this trade type was selected",
     )
     
@@ -148,7 +151,9 @@ class DueDiligenceReport(BaseModel):
     )
     
     # Executive Summary (NEW - quick read)
-    executive_summary: str = Field(
+    # Optional for backward compatibility with old DD reports
+    executive_summary: Optional[str] = Field(
+        default=None,
         description="2-3 sentence summary for quick reading",
     )
     

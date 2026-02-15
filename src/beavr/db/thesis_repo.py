@@ -265,8 +265,8 @@ class ThesisRepository:
                 """
                 UPDATE trade_theses 
                 SET status = ?, confidence = ?, entry_price_target = ?, 
-                    profit_target = ?, stop_loss = ?, dd_report_id = ?,
-                    position_id = ?, updated_at = ?
+                    profit_target = ?, stop_loss = ?, dd_approved = ?,
+                    dd_report_id = ?, position_id = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -275,6 +275,7 @@ class ThesisRepository:
                     str(thesis.entry_price_target) if thesis.entry_price_target else None,
                     str(thesis.profit_target) if thesis.profit_target else None,
                     str(thesis.stop_loss) if thesis.stop_loss else None,
+                    int(thesis.dd_approved),
                     thesis.dd_report_id,
                     thesis.position_id,
                     datetime.now().isoformat(),
@@ -348,4 +349,5 @@ class ThesisRepository:
             dd_report_id=row[17],
             source=row[18],
             notes=row[19],
+            position_id=row[20] if len(row) > 20 else None,
         )

@@ -54,6 +54,115 @@ logger = logging.getLogger(__name__)
 ET = ZoneInfo("America/New_York")
 
 
+class CompanyNameCache:
+    """
+    Cache for mapping symbols to company names.
+    
+    Used to detect related symbols (e.g., GOOG/GOOGL are both Alphabet).
+    Fetches company names from Alpaca API and caches them.
+    """
+    
+    def __init__(self) -> None:
+        self._cache: dict[str, str] = {}
+        self._trading_client: Any = None
+    
+    def set_trading_client(self, client: Any) -> None:
+        """Set the Alpaca trading client for API lookups."""
+        self._trading_client = client
+    
+    def _normalize_company_name(self, name: str) -> str:
+        """
+        Normalize company name for comparison.
+        
+        Removes common suffixes and variations to match
+        'Alphabet Inc.' with 'Alphabet Inc. Class A', etc.
+        """
+        import re
+        
+        if not name:
+            return ""
+        
+        # Convert to lowercase for comparison
+        name = name.lower().strip()
+        
+        # Remove share class indicators (class a, class c capital stock, etc.)
+        # This regex handles variations like "class a", "class c capital stock", etc.
+        name = re.sub(r'\s+class\s+[a-z](\s+\w+)*', '', name)
+        name = re.sub(r'\s+-\s+class\s+[a-z](\s+\w+)*', '', name)
+        name = re.sub(r'\s+cl\s+[a-z]', '', name)
+        name = re.sub(r'\s+series\s+[a-z]', '', name)
+        
+        # Remove common suffixes
+        for suffix in [
+            " common stock", " common", " ordinary shares", " capital stock",
+            " (delaware)", " corp", " corporation", " inc", " inc.",
+            " ltd", " ltd.", " limited", " plc", " llc", " n.v.", " nv",
+            " holdings", " holding", " group", " co",
+        ]:
+            if name.endswith(suffix):
+                name = name[:-len(suffix)].strip()
+        
+        # Remove trailing punctuation
+        name = name.rstrip(".,- ")
+        
+        return name
+    
+    def get_company_name(self, symbol: str) -> str:
+        """
+        Get the normalized company name for a symbol.
+        
+        Uses cache if available, otherwise fetches from Alpaca API.
+        """
+        if symbol in self._cache:
+            return self._cache[symbol]
+        
+        if not self._trading_client:
+            # No client - can't look up, return symbol as-is
+            return symbol
+        
+        try:
+            from alpaca.trading.requests import GetAssetsRequest
+            from alpaca.trading.enums import AssetClass
+            
+            # Try to get the asset info
+            asset = self._trading_client.get_asset(symbol)
+            if asset and asset.name:
+                normalized = self._normalize_company_name(asset.name)
+                self._cache[symbol] = normalized
+                return normalized
+        except Exception:
+            # API error - just return symbol
+            pass
+        
+        self._cache[symbol] = symbol
+        return symbol
+    
+    def are_same_company(self, symbol1: str, symbol2: str) -> bool:
+        """Check if two symbols represent the same company."""
+        if symbol1 == symbol2:
+            return True
+        
+        name1 = self.get_company_name(symbol1)
+        name2 = self.get_company_name(symbol2)
+        
+        # Compare normalized names
+        return name1 == name2
+
+
+# Global cache instance
+_company_cache = CompanyNameCache()
+
+
+def get_company_name(symbol: str) -> str:
+    """Get the normalized company name for a symbol."""
+    return _company_cache.get_company_name(symbol)
+
+
+def symbols_are_related(symbol1: str, symbol2: str) -> bool:
+    """Check if two symbols represent the same company."""
+    return _company_cache.are_same_company(symbol1, symbol2)
+
+
 class OrchestratorPhase(str, Enum):
     """Current operating phase of the orchestrator."""
     
@@ -78,6 +187,9 @@ class SystemState(BaseModel):
     
     # Research state
     pending_dd_candidates: list[str] = Field(default_factory=list)
+    # Track DD runs per symbol: {symbol: {"count": int, "last_run": str, "has_major_event": bool}}
+    dd_runs_today: dict[str, dict] = Field(default_factory=dict)
+    # Legacy field for backward compatibility - will be migrated to dd_runs_today
     dd_completed_tonight: list[str] = Field(default_factory=list)
     
     # Position state
@@ -140,11 +252,17 @@ class V2Config:
     market_research_interval: int = 900  # 15 minutes
     position_check_interval: int = 300  # 5 minutes
     power_hour_check_interval: int = 120  # 2 minutes
+    overnight_sleep_interval: int = 1800  # 30 minutes for off-hours
+    news_alert_interval: int = 300  # 5 minutes - continuous news scanning
 
     # Research scope
     market_movers_limit: int = 10
     news_limit: int = 25
     max_research_symbols: int = 25
+    
+    # DD limits
+    max_dd_per_symbol_daily: int = 3  # Max DD runs per symbol per day
+    dd_rerun_cooldown_minutes: int = 120  # Min minutes between DD reruns
     
     # Paths
     state_file: str = "logs/ai_investor/v2_state.json"
@@ -221,6 +339,9 @@ class V2AutonomousOrchestrator:
         """Set the Alpaca trading and data clients."""
         self._trading_client = trading_client
         self._data_client = data_client
+        
+        # Initialize the company cache for related symbol detection
+        _company_cache.set_trading_client(trading_client)
     
     def set_context_builder(self, builder) -> None:
         """Set the function to build AgentContext for symbols."""
@@ -248,6 +369,7 @@ class V2AutonomousOrchestrator:
             self.state.invested_today = False
             self.state.active_day_trades = []
             self.state.dd_completed_tonight = []
+            self.state.dd_runs_today = {}
             self.state.last_research_run = None
     
     def _save_state(self) -> None:
@@ -319,6 +441,36 @@ class V2AutonomousOrchestrator:
             datetime.now() + timedelta(hours=self.config.circuit_breaker_hours)
         )
         self._save_state()
+    
+    def _has_related_position(self, symbol: str) -> bool:
+        """
+        Check if we already have a position in this symbol or a related symbol.
+        
+        For example, GOOG and GOOGL are both Alphabet - we should only hold one.
+        Uses Alpaca API to dynamically lookup company names.
+        """
+        # Check active swing trades
+        for held in self.state.active_swing_trades:
+            if symbols_are_related(symbol, held):
+                return True
+        
+        # Check active day trades
+        for held in self.state.active_day_trades:
+            if symbols_are_related(symbol, held):
+                return True
+        
+        return False
+    
+    def _is_related_to_any(self, symbol: str, symbols: set[str]) -> Optional[str]:
+        """
+        Check if symbol is related to any symbol in the set.
+        
+        Returns the related symbol if found, None otherwise.
+        """
+        for s in symbols:
+            if symbols_are_related(symbol, s):
+                return s
+        return None
     
     def _check_risk_limits(self, portfolio_value: Decimal) -> bool:
         """
@@ -586,6 +738,54 @@ class V2AutonomousOrchestrator:
             logger.warning(f"News classification failed: {e}")
             return []
 
+    def _scan_breaking_news(self) -> None:
+        """
+        Scan for breaking news alerts during off-hours.
+        
+        This runs continuously to catch major market-moving events that
+        may require immediate thesis generation or position adjustments.
+        Only processes HIGH importance events to avoid noise.
+        """
+        try:
+            # Fetch general market news (no symbol filter)
+            news_items = self._fetch_news_items([])
+            if not news_items:
+                return
+            
+            # Classify into events
+            events = self._classify_news_events(news_items)
+            if not events:
+                return
+            
+            # Filter for HIGH importance only
+            high_importance_events = [
+                e for e in events 
+                if e.importance == EventImportance.HIGH
+            ]
+            
+            if not high_importance_events:
+                logger.info("  📰 No high-importance breaking news")
+                return
+            
+            logger.info(f"  🚨 Found {len(high_importance_events)} HIGH importance events!")
+            
+            # Store events
+            if self.events_repo:
+                for event in high_importance_events:
+                    try:
+                        self.events_repo.create(event)
+                        logger.info(f"     📌 {event.symbol or 'MARKET'}: {event.headline[:60]}...")
+                    except Exception as e:
+                        logger.warning(f"Failed to store event: {e}")
+            
+            # Generate theses from breaking events
+            created_theses = self._generate_theses_from_events(high_importance_events)
+            if created_theses:
+                logger.info(f"  ✅ Created {len(created_theses)} theses from breaking news")
+                
+        except Exception as e:
+            logger.warning(f"Breaking news scan failed: {e}")
+
     def _dedupe_events(self, events: list[MarketEvent]) -> list[MarketEvent]:
         """De-duplicate events by ID."""
         unique: dict[str, MarketEvent] = {}
@@ -756,6 +956,88 @@ class V2AutonomousOrchestrator:
             self._run_dd_cycle(pending_dd, "🔬 MARKET HOURS DD CYCLE")
         elif research_mode:
             logger.info("🔬 No pending DD candidates in research mode")
+
+    def _should_run_dd(self, symbol: str, has_major_event: bool = False) -> tuple[bool, str]:
+        """
+        Check if DD should run for a symbol.
+        
+        Rules:
+        1. Max 3 DD runs per symbol per day
+        2. At least 2 hours between DD reruns (unless major event)
+        3. First DD always runs
+        4. Subsequent DD only if major event or cooldown passed
+        
+        Args:
+            symbol: The stock symbol
+            has_major_event: Whether there's a major event for this symbol
+            
+        Returns:
+            Tuple of (should_run, reason)
+        """
+        dd_info = self.state.dd_runs_today.get(symbol, {})
+        dd_count = dd_info.get("count", 0)
+        last_run_str = dd_info.get("last_run")
+        
+        # First DD for this symbol today - always run
+        if dd_count == 0:
+            return True, "first DD of day"
+        
+        # Check max DD limit
+        if dd_count >= self.config.max_dd_per_symbol_daily:
+            return False, f"max {self.config.max_dd_per_symbol_daily} DD/day reached"
+        
+        # Check cooldown
+        if last_run_str:
+            try:
+                last_run = datetime.fromisoformat(last_run_str)
+                elapsed_minutes = (datetime.now() - last_run).total_seconds() / 60
+                
+                # Major event bypasses cooldown
+                if has_major_event:
+                    return True, f"major event (run #{dd_count + 1})"
+                
+                # Check cooldown
+                if elapsed_minutes < self.config.dd_rerun_cooldown_minutes:
+                    remaining = int(self.config.dd_rerun_cooldown_minutes - elapsed_minutes)
+                    return False, f"cooldown ({remaining}m remaining)"
+                    
+            except (ValueError, TypeError):
+                pass  # Invalid date format, allow DD
+        
+        # Cooldown passed but no major event - still allow if explicitly requested
+        if has_major_event:
+            return True, f"major event (run #{dd_count + 1})"
+        
+        # No major event and not first run - be conservative
+        return False, "no major event for re-DD"
+
+    def _record_dd_run(self, symbol: str, has_major_event: bool = False) -> None:
+        """Record that DD was run for a symbol."""
+        dd_info = self.state.dd_runs_today.get(symbol, {"count": 0})
+        dd_info["count"] = dd_info.get("count", 0) + 1
+        dd_info["last_run"] = datetime.now().isoformat()
+        dd_info["has_major_event"] = has_major_event
+        self.state.dd_runs_today[symbol] = dd_info
+        
+        # Also maintain legacy list for backward compatibility
+        if symbol not in self.state.dd_completed_tonight:
+            self.state.dd_completed_tonight.append(symbol)
+
+    def _has_major_event_for_symbol(self, symbol: str) -> bool:
+        """Check if there's a major/high importance unprocessed event for symbol."""
+        if not self.events_repo:
+            return False
+        
+        try:
+            from beavr.models.market_event import EventImportance
+            unprocessed = self.events_repo.get_unprocessed()
+            for event in unprocessed:
+                if event.symbol == symbol and event.importance == EventImportance.HIGH:
+                    return True
+        except Exception:
+            pass
+        
+        return False
     
     def _run_dd_cycle(self, candidates: list[TradeThesis], label: str) -> None:
         """Run a DD cycle for the provided candidates."""
@@ -772,31 +1054,45 @@ class V2AutonomousOrchestrator:
             return
 
         logger.info(f"📋 {len(candidates)} candidates for DD review")
+        
+        # Track stats for this cycle
+        dd_run_count = 0
+        dd_skipped_count = 0
 
         for thesis in candidates:
-            if thesis.symbol in self.state.dd_completed_tonight:
-                logger.info(f"  Skipping {thesis.symbol} - already DD'd today")
+            symbol = thesis.symbol
+            
+            # Check for major event for this symbol
+            has_major_event = self._has_major_event_for_symbol(symbol)
+            
+            # Check if we should run DD
+            should_run, reason = self._should_run_dd(symbol, has_major_event)
+            
+            if not should_run:
+                logger.info(f"  ⏭️  Skipping {symbol}: {reason}")
+                dd_skipped_count += 1
                 continue
 
-            logger.info(f"\n🔬 Researching {thesis.symbol}...")
+            logger.info(f"\n🔬 Researching {symbol}... ({reason})")
             logger.info(f"   Trade Type: {thesis.trade_type.value}")
             logger.info(f"   Catalyst: {thesis.catalyst[:80]}...")
 
             try:
-                ctx = self._build_context([thesis.symbol])
+                ctx = self._build_context([symbol])
 
                 dd_report = self.dd_agent.analyze_thesis(thesis, ctx)
 
                 if dd_report:
+                    # Save report
                     if self.dd_repo:
                         self.dd_repo.create(dd_report)
 
+                    # Process recommendation
                     if dd_report.recommendation == DDRecommendation.APPROVE:
                         logger.info(f"   ✅ APPROVED (confidence: {dd_report.confidence:.0%})")
                         thesis.dd_approved = True
                         thesis.dd_report_id = dd_report.id
                         thesis.status = ThesisStatus.ACTIVE
-
                         thesis.entry_price_target = dd_report.recommended_entry
                         thesis.profit_target = dd_report.recommended_target
                         thesis.stop_loss = dd_report.recommended_stop
@@ -806,21 +1102,30 @@ class V2AutonomousOrchestrator:
                         thesis.dd_report_id = dd_report.id
 
                     else:
-                        logger.info(f"   ❌ REJECTED: {dd_report.rejection_reason}")
+                        reason = dd_report.rejection_rationale or "No reason provided"
+                        logger.info(f"   ❌ REJECTED: {reason}")
                         thesis.status = ThesisStatus.INVALIDATED
                         thesis.dd_report_id = dd_report.id
 
-                    self.thesis_repo.update(thesis)
+                    # Update thesis in DB
+                    try:
+                        self.thesis_repo.update(thesis)
+                    except Exception as update_err:
+                        logger.error(f"   Failed to update thesis: {update_err}")
 
-                self.state.dd_completed_tonight.append(thesis.symbol)
+                # Record DD run (even if thesis update failed)
+                self._record_dd_run(symbol, has_major_event)
+                dd_run_count += 1
 
             except Exception as e:
-                logger.error(f"   Error running DD for {thesis.symbol}: {e}")
+                logger.error(f"   Error running DD for {symbol}: {e}")
+                # Still record the attempt to prevent infinite retries
+                self._record_dd_run(symbol, has_major_event)
 
             time.sleep(2)
 
         self._save_state()
-        logger.info("\n✅ DD cycle complete")
+        logger.info(f"\n✅ DD cycle complete: {dd_run_count} run, {dd_skipped_count} skipped")
 
     def _run_overnight_dd_cycle(self) -> None:
         """
@@ -930,7 +1235,15 @@ class V2AutonomousOrchestrator:
         
         # Get approved day trade theses
         approved = self._get_approved_theses()
-        day_trades = [t for t in approved if t.trade_type == TradeType.DAY_TRADE]
+        
+        # Filter: only day trades, and skip if already holding related symbol
+        day_trades = []
+        for t in approved:
+            if t.trade_type != TradeType.DAY_TRADE:
+                continue
+            if self._has_related_position(t.symbol):
+                continue
+            day_trades.append(t)
         
         if not day_trades:
             logger.info("No approved day trades for today")
@@ -938,13 +1251,23 @@ class V2AutonomousOrchestrator:
         
         logger.info(f"📋 {len(day_trades)} approved day trades to execute")
         
+        # Track symbols we're about to trade this cycle
+        traded_this_cycle: set[str] = set()
+        
         for thesis in day_trades:
             if self.state.trades_today >= self.config.daily_trade_limit:
                 logger.info("Daily trade limit reached")
                 break
             
+            # Skip if we already traded a related symbol this cycle
+            related_symbol = self._is_related_to_any(thesis.symbol, traded_this_cycle)
+            if related_symbol:
+                logger.info(f"   ⏭️  Skipping {thesis.symbol}: already trading related symbol {related_symbol}")
+                continue
+            
             try:
                 self._execute_trade(thesis, is_day_trade=True)
+                traded_this_cycle.add(thesis.symbol)
             except Exception as e:
                 logger.error(f"Error executing {thesis.symbol}: {e}")
     
@@ -960,11 +1283,16 @@ class V2AutonomousOrchestrator:
         
         # Get approved swing trade theses (not day trades)
         approved = self._get_approved_theses()
-        swing_trades = [
-            t for t in approved 
-            if t.trade_type != TradeType.DAY_TRADE
-            and t.symbol not in self.state.active_swing_trades  # Not already in
-        ]
+        
+        # Filter: skip if already holding this symbol OR a related symbol
+        swing_trades = []
+        for t in approved:
+            if t.trade_type == TradeType.DAY_TRADE:
+                continue
+            # Check if already holding this symbol or related symbol (e.g., GOOG/GOOGL)
+            if self._has_related_position(t.symbol):
+                continue
+            swing_trades.append(t)
         
         if not swing_trades:
             return  # No need to log - this is continuous
@@ -974,13 +1302,23 @@ class V2AutonomousOrchestrator:
         logger.info("=" * 40)
         logger.info(f"📋 {len(swing_trades)} approved swing trades to execute")
         
+        # Track symbols we're about to trade this cycle to avoid duplicates
+        traded_this_cycle: set[str] = set()
+        
         for thesis in swing_trades:
             if self.state.trades_today >= self.config.daily_trade_limit:
                 logger.info("Daily trade limit reached")
                 break
             
+            # Skip if we already traded a related symbol this cycle
+            related_symbol = self._is_related_to_any(thesis.symbol, traded_this_cycle)
+            if related_symbol:
+                logger.info(f"   ⏭️  Skipping {thesis.symbol}: already trading related symbol {related_symbol}")
+                continue
+            
             try:
                 self._execute_trade(thesis, is_day_trade=False)
+                traded_this_cycle.add(thesis.symbol)
             except Exception as e:
                 logger.error(f"Error executing swing trade {thesis.symbol}: {e}")
     
@@ -1037,7 +1375,7 @@ class V2AutonomousOrchestrator:
             
             order_request = MarketOrderRequest(
                 symbol=thesis.symbol,
-                notional=float(position_value),
+                notional=round(float(position_value), 2),  # Alpaca requires 2 decimal places
                 side=OrderSide.BUY,
                 time_in_force=TimeInForce.DAY,
             )
@@ -1214,18 +1552,50 @@ class V2AutonomousOrchestrator:
                 
                 # Run phase-specific logic
                 if current_phase == OrchestratorPhase.OVERNIGHT_DD:
-                    # Heartbeat log
+                    # Get pending DD candidates
                     pending = self._get_pending_dd_candidates()
                     logger.info(f"🌙 Overnight DD | Pending Candidates: {len(pending)}")
                     
-                    # Deep research overnight
-                    self._run_overnight_dd_cycle()
-                    # Check news periodically
-                    if (now - last_news_check).total_seconds() > self.config.news_poll_interval:
-                        # TODO: Run news monitor
-                        last_news_check = now
-                    logger.info("💤 Sleeping 300s...")
-                    time.sleep(300)  # 5 min between DD cycles
+                    # Run DD cycle if there are pending candidates
+                    dd_was_run = False
+                    if pending:
+                        # Run the DD cycle - it tracks what was actually processed
+                        self._run_overnight_dd_cycle()
+                        
+                        # Re-check pending to see if any work remains
+                        remaining_pending = self._get_pending_dd_candidates()
+                        # If we still have the same pending (all were skipped), no real work was done
+                        dd_was_run = len(remaining_pending) < len(pending)
+                    
+                    # Decide sleep duration
+                    if dd_was_run:
+                        # We actually did DD work - short sleep to continue processing
+                        logger.info(f"💤 Sleeping {self.config.position_check_interval}s between DD cycles...")
+                        time.sleep(self.config.position_check_interval)
+                    else:
+                        # No DD work done - check for news or sleep long
+                        time_since_news = (datetime.now(ET) - last_news_check).total_seconds()
+                        if time_since_news >= self.config.news_alert_interval:
+                            logger.info("📰 Scanning for breaking news...")
+                            self._scan_breaking_news()
+                            # Set last_news_check to NOW (after scan completes) to account for scan duration
+                            last_news_check = datetime.now(ET)
+                            
+                            # Check if news created new theses
+                            new_pending = self._get_pending_dd_candidates()
+                            if new_pending and len(new_pending) > len(pending):
+                                logger.info(f"  📝 News created {len(new_pending) - len(pending)} new thesis candidates")
+                                # Short sleep to process them next iteration
+                                time.sleep(60)
+                            else:
+                                # No new work - sleep until next news scan
+                                logger.info(f"💤 No work. Sleeping {self.config.news_alert_interval // 60}m until next news scan...")
+                                time.sleep(self.config.news_alert_interval)
+                        else:
+                            # No news needed yet - sleep until next news scan
+                            remaining = max(60, int(self.config.news_alert_interval - time_since_news))
+                            logger.info(f"💤 No work. Sleeping {remaining // 60}m until next news scan...")
+                            time.sleep(remaining)
                     
                 elif current_phase == OrchestratorPhase.PRE_MARKET:
                     # Heartbeat log
@@ -1235,8 +1605,15 @@ class V2AutonomousOrchestrator:
                     # Run morning scan once
                     if not candidates_today:
                         candidates_today = self._run_pre_market_scan()
-                    logger.info("💤 Sleeping 300s...")
-                    time.sleep(300)  # Check every 5 min
+                    
+                    # Continuous news scanning for breaking alerts
+                    if (now - last_news_check).total_seconds() > self.config.news_alert_interval:
+                        logger.info("📰 Scanning for breaking news...")
+                        self._scan_breaking_news()
+                        last_news_check = now
+                    
+                    logger.info(f"💤 Sleeping {self.config.position_check_interval}s...")
+                    time.sleep(self.config.position_check_interval)
                     
                 elif current_phase == OrchestratorPhase.POWER_HOUR:
                     # Heartbeat log
@@ -1304,9 +1681,20 @@ class V2AutonomousOrchestrator:
                     logger.info("🌆 After Hours | Preparing for overnight research...")
                     # Reset for next day
                     candidates_today = []
-                    # Learn from today's trades (TODO)
-                    logger.info("💤 Sleeping 300s...")
-                    time.sleep(300)
+                    
+                    # Check if we should scan for news
+                    time_since_news = (datetime.now(ET) - last_news_check).total_seconds()
+                    if time_since_news >= self.config.news_alert_interval:
+                        logger.info("📰 Scanning for breaking news...")
+                        self._scan_breaking_news()
+                        last_news_check = datetime.now(ET)
+                    
+                    # Sleep until next news scan
+                    remaining = int(self.config.news_alert_interval - (datetime.now(ET) - last_news_check).total_seconds())
+                    sleep_time = max(60, min(remaining, self.config.overnight_sleep_interval))
+                    logger.info(f"💤 Sleeping {sleep_time // 60}m until next news scan...")
+                    logger.info(f"💤 Sleeping {sleep_time // 60}m until next news scan...")
+                    time.sleep(sleep_time)
                 
             except KeyboardInterrupt:
                 logger.info("⛔ Shutdown requested")

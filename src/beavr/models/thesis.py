@@ -170,6 +170,10 @@ class TradeThesis(BaseModel):
         default=None,
         description="ID of associated DD report",
     )
+    position_id: Optional[int] = Field(
+        default=None,
+        description="ID of position if executed",
+    )
     
     # Optional metadata
     source: Optional[str] = Field(

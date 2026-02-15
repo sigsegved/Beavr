@@ -214,3 +214,8 @@ __marimo__/
 *.db
 *.sqlite
 .beavr/logs/
+
+
+# Logs files
+logs/
+logslogs/
