@@ -226,3 +226,38 @@ class TestAlpacaScreener:
 
         with pytest.raises(BrokerError, match="Failed to get most actives"):
             screener.get_most_actives()
+
+    # ===== __init__ coverage =====
+
+    def test_init_actually_calls_constructor(
+        self, _patch_alpaca_modules: Any
+    ) -> None:
+        """Instantiating AlpacaScreener should import classes and store them."""
+        from beavr.broker.alpaca.screener import AlpacaScreener
+
+        instance = AlpacaScreener("key", "secret")
+        assert instance._client is not None
+        assert instance._MarketMoversRequest is not None
+        assert instance._MostActivesRequest is not None
+        assert instance._MostActivesBy is not None
+
+    def test_init_import_error_when_alpaca_missing(
+        self, _patch_alpaca_modules: Any
+    ) -> None:
+        """AlpacaScreener should raise ImportError when alpaca-py is missing."""
+        import builtins
+
+        from beavr.broker.alpaca.screener import AlpacaScreener
+
+        original_import = builtins.__import__
+
+        def selective_import(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "alpaca.data":
+                raise ImportError("No module named 'alpaca.data'")
+            return original_import(name, *args, **kwargs)
+
+        with (
+            patch("builtins.__import__", side_effect=selective_import),
+            pytest.raises(ImportError, match="alpaca-py required for screener"),
+        ):
+            AlpacaScreener("key", "secret")

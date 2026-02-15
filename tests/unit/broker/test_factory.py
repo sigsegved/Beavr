@@ -169,3 +169,84 @@ class TestCreateNewsProvider:
         ):
             result = BrokerFactory.create_news_provider(config)
         assert result is mock_news
+
+
+class TestCreateBrokerUnsupported:
+    """Tests for unsupported broker provider."""
+
+    def test_unsupported_broker_provider_raises(self) -> None:
+        """An unknown provider string should raise BrokerError."""
+        broker_cfg = BrokerProviderConfig.model_construct(provider="foobar")
+        config = AppConfig.model_construct(broker=broker_cfg, alpaca=AppConfig().alpaca)
+        with pytest.raises(BrokerError, match="unsupported_provider"):
+            BrokerFactory.create_broker(config)
+
+
+class TestCreateDataProviderWebull:
+    """Tests for BrokerFactory.create_data_provider with Webull."""
+
+    @pytest.mark.usefixtures("_webull_env")
+    def test_webull_data_provider_with_credentials(self) -> None:
+        """Webull data provider should be created when credentials exist."""
+        webull_cfg = WebullConfig()
+        broker_cfg = BrokerProviderConfig(provider="webull", webull=webull_cfg)
+        config = AppConfig(broker=broker_cfg)
+        mock_data = MagicMock()
+        mock_api_client_cls = MagicMock()
+        with patch.dict(
+            "sys.modules",
+            {
+                "webullsdkcore": MagicMock(),
+                "webullsdkcore.client": MagicMock(ApiClient=mock_api_client_cls),
+                "beavr.broker.webull": MagicMock(),
+                "beavr.broker.webull.data": MagicMock(WebullMarketData=MagicMock(return_value=mock_data)),
+            },
+        ):
+            result = BrokerFactory.create_data_provider(config)
+        assert result is mock_data
+
+    def test_webull_data_provider_missing_config_raises(self) -> None:
+        """Webull data provider without webull config should raise."""
+        broker_cfg = BrokerProviderConfig(provider="webull")
+        config = AppConfig(broker=broker_cfg)
+        with pytest.raises(BrokerError, match="missing_config"):
+            BrokerFactory.create_data_provider(config)
+
+    def test_webull_data_provider_missing_credentials_raises(self) -> None:
+        """Webull data provider without credentials should raise."""
+        os.environ.pop("WEBULL_APP_KEY", None)
+        os.environ.pop("WEBULL_APP_SECRET", None)
+        webull_cfg = WebullConfig()
+        broker_cfg = BrokerProviderConfig(provider="webull", webull=webull_cfg)
+        config = AppConfig(broker=broker_cfg)
+        with pytest.raises(BrokerError, match="missing_credentials"):
+            BrokerFactory.create_data_provider(config)
+
+
+class TestCreateDataProviderUnsupported:
+    """Tests for unsupported data provider."""
+
+    def test_unsupported_data_provider_raises(self) -> None:
+        """An unknown data provider string should raise BrokerError."""
+        broker_cfg = BrokerProviderConfig.model_construct(provider="foobar")
+        config = AppConfig.model_construct(broker=broker_cfg, alpaca=AppConfig().alpaca)
+        with pytest.raises(BrokerError, match="unsupported_provider"):
+            BrokerFactory.create_data_provider(config)
+
+
+class TestCreateScreenerWithCredentials:
+    """Tests for BrokerFactory.create_screener with valid creds."""
+
+    @pytest.mark.usefixtures("_alpaca_env")
+    def test_screener_with_credentials_creates_instance(self) -> None:
+        """With Alpaca credentials, should create AlpacaScreener."""
+        config = AppConfig()
+        mock_screener = MagicMock()
+        with patch(
+            "beavr.broker.factory.AlpacaScreener", create=True, return_value=mock_screener
+        ) as mock_cls, patch.dict(
+            "sys.modules",
+            {"beavr.broker.alpaca.screener": MagicMock(AlpacaScreener=mock_cls)},
+        ):
+            result = BrokerFactory.create_screener(config)
+        assert result is mock_screener

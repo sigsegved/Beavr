@@ -177,3 +177,55 @@ class TestAlpacaNews:
         result = news_adapter.get_news(symbols=["AAPL"], limit=5)
 
         assert result == []
+
+    # ===== __init__ coverage =====
+
+    def test_init_actually_calls_constructor(
+        self, _patch_alpaca_modules: Any
+    ) -> None:
+        """Instantiating AlpacaNews should import NewsClient and store it."""
+        from beavr.broker.alpaca.news import AlpacaNews
+
+        adapter = AlpacaNews("key", "secret")
+        assert adapter._client is not None
+        assert adapter._NewsRequest is not None
+
+    def test_init_import_error_when_alpaca_missing(
+        self, _patch_alpaca_modules: Any
+    ) -> None:
+        """AlpacaNews should raise ImportError when alpaca-py is not installed."""
+        import builtins
+
+        from beavr.broker.alpaca.news import AlpacaNews
+
+        original_import = builtins.__import__
+
+        def selective_import(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "alpaca.data":
+                raise ImportError("No module named 'alpaca.data'")
+            return original_import(name, *args, **kwargs)
+
+        with (
+            patch("builtins.__import__", side_effect=selective_import),
+            pytest.raises(ImportError, match="alpaca-py required for news"),
+        ):
+            AlpacaNews("key", "secret")
+
+    # ===== inner parsing exception (lines 67-68) =====
+
+    def test_get_news_inner_parse_error_returns_empty(
+        self,
+        news_adapter: Any,
+        mock_news_client: MagicMock,
+    ) -> None:
+        """When parsing the news list raises, should log and return empty."""
+        # Create a response whose .data.get("news") returns a value that
+        # raises an exception when iterated / sliced.
+        bad_response = MagicMock()
+        bad_data: dict[str, Any] = {"news": None}  # None[:limit] raises TypeError
+        bad_response.data = bad_data
+        mock_news_client.get_news.return_value = bad_response
+
+        result = news_adapter.get_news(symbols=["AAPL"], limit=5)
+
+        assert result == []

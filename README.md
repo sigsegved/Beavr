@@ -9,7 +9,8 @@
 
 - 📊 **Backtesting Engine** - Test strategies against historical data
 - 💰 **DCA Strategies** - Dollar-cost averaging with dip buying
-- 📈 **Alpaca Integration** - Historical data from Alpaca Markets
+- � **Multi-Broker Support** - Alpaca and Webull via pluggable adapter layer
+- 📈 **Market Data** - Historical bars, snapshots, and real-time quotes
 - ⚙️ **TOML Configuration** - Configure strategies without writing code
 - 🎨 **Rich CLI** - Beautiful terminal output with tables and colors
 
@@ -109,8 +110,10 @@ mypy src/
 ```
 src/beavr/
 ├── backtest/     # Backtesting engine
+├── broker/       # Broker abstraction layer
+│   ├── alpaca/   # Alpaca adapter
+│   └── webull/   # Webull adapter
 ├── cli/          # Command-line interface
-├── data/         # Data fetching (Alpaca)
 ├── db/           # Database layer
 ├── models/       # Pydantic data models
 └── strategies/   # Strategy implementations

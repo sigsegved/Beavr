@@ -7,9 +7,14 @@ Beavr uses TOML files and environment variables for configuration.
 Create a `.env` file in the project root:
 
 ```bash
-# Alpaca API credentials (required for data fetching)
+# Alpaca API credentials (default broker)
 ALPACA_API_KEY=your_api_key
 ALPACA_API_SECRET=your_api_secret
+
+# Webull API credentials (optional, for Webull broker)
+WEBULL_APP_KEY=your_app_key
+WEBULL_APP_SECRET=your_app_secret
+WEBULL_ACCOUNT_ID=your_account_id  # optional, auto-discovered if omitted
 
 # Optional: Database path (defaults to ~/.beavr/beavr.db)
 BEAVR_DATABASE_PATH=~/.beavr/beavr.db
@@ -24,6 +29,40 @@ The application uses these settings (via Pydantic Settings):
 | `database_path` | `BEAVR_DATABASE_PATH` | `~/.beavr/beavr.db` | SQLite database path |
 | `alpaca_api_key` | `ALPACA_API_KEY` | (required) | Alpaca API key |
 | `alpaca_api_secret` | `ALPACA_API_SECRET` | (required) | Alpaca API secret |
+| `webull_app_key` | `WEBULL_APP_KEY` | (optional) | Webull app key |
+| `webull_app_secret` | `WEBULL_APP_SECRET` | (optional) | Webull app secret |
+| `webull_account_id` | `WEBULL_ACCOUNT_ID` | (optional) | Webull account ID |
+
+## Broker Configuration
+
+Beavr supports multiple brokers via a pluggable adapter layer. Configure the
+active broker in your TOML config:
+
+### Alpaca (default)
+
+```toml
+[broker]
+provider = "alpaca"
+paper = true  # Use paper trading
+```
+
+### Webull
+
+```toml
+[broker]
+provider = "webull"
+paper = true
+
+[broker.webull]
+region = "us"  # "us" or "hk"
+```
+
+Set `WEBULL_APP_KEY`, `WEBULL_APP_SECRET`, and optionally `WEBULL_ACCOUNT_ID`
+in your environment. Install extra dependencies:
+
+```bash
+pip install -e ".[webull]"
+```
 
 ## Strategy Configuration
 
@@ -110,11 +149,22 @@ bvr backtest run simple_dca SPY --start 2020-01-01 --end 2024-01-01
 bvr backtest export <run-id> results.csv
 ```
 
-## Alpaca API Notes
+## Broker API Notes
+
+### Alpaca
 
 - **Paper trading** keys work for all backtesting operations
 - Data is fetched from Alpaca's historical data API
 - Bars are cached locally to reduce API calls
-- Supported timeframes: 1Day (used for backtesting)
+- Supported timeframes: 1min, 5min, 15min, 30min, 1hour, 1day, 1week
+- Supports screener and news APIs
+- Get your API keys from: https://app.alpaca.markets/
 
-Get your API keys from: https://app.alpaca.markets/
+### Webull
+
+- Requires OpenAPI SDK credentials (app key + app secret)
+- Automatic account discovery if account ID is not provided
+- Instrument IDs are cached locally in SQLite for performance
+- Supported timeframes: 1min, 5min, 15min, 30min, 1hour, 1day, 1week
+- Supports stocks and crypto (auto-detected by symbol format)
+- Get your API keys from: https://www.webull.com/openapi

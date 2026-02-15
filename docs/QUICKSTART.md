@@ -5,7 +5,9 @@ Get up and running with Beavr in 5 minutes.
 ## Prerequisites
 
 - Python 3.11+
-- [Alpaca Markets account](https://alpaca.markets/) (free paper trading account works)
+- A broker account (one of the following):
+  - [Alpaca Markets](https://alpaca.markets/) (free paper trading, default)
+  - [Webull OpenAPI](https://www.webull.com/openapi) (optional)
 
 ## Installation
 
