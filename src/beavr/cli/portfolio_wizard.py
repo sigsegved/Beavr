@@ -15,8 +15,12 @@ from decimal import Decimal, InvalidOperation
 from typing import Optional
 
 import typer
+from rich.columns import Columns
 from rich.console import Console
 from rich.panel import Panel
+from rich.rule import Rule
+from rich.table import Table
+from rich.text import Text
 
 from beavr.db.protocols import PortfolioStore
 from beavr.models.portfolio_record import (
@@ -34,6 +38,61 @@ console = Console()
 
 _DEFAULT_CAPITAL = Decimal("10000.00")
 _DEFAULT_CAPITAL_PCT = 80.0
+
+# ---------------------------------------------------------------------------
+# Visual constants
+# ---------------------------------------------------------------------------
+
+_BEAVER_LOGO = r"""
+    /\_/\
+   ( o.o )  [bold cyan]B E A V R[/bold cyan]
+    > ^ <   [dim]Autonomous AI Trading[/dim]
+"""
+
+_MODE_INFO = {
+    "1": {
+        "mode": TradingMode.PAPER,
+        "icon": "📝",
+        "label": "Paper Trading",
+        "desc": "Simulated trades — no real money at risk",
+        "style": "yellow",
+    },
+    "2": {
+        "mode": TradingMode.LIVE,
+        "icon": "💰",
+        "label": "Live Trading",
+        "desc": "Real money — orders execute on your brokerage",
+        "style": "red",
+    },
+}
+
+_AGG_INFO = {
+    "1": {
+        "agg": Aggressiveness.CONSERVATIVE,
+        "icon": "🛡️",
+        "label": "Conservative",
+        "desc": "Tight stops, small positions, blue-chip focus",
+        "style": "green",
+        "bar": "▓░░░░",
+    },
+    "2": {
+        "agg": Aggressiveness.MODERATE,
+        "icon": "⚖️",
+        "label": "Moderate",
+        "desc": "Balanced risk/reward, diversified approach",
+        "style": "yellow",
+        "bar": "▓▓▓░░",
+    },
+    "3": {
+        "agg": Aggressiveness.AGGRESSIVE,
+        "icon": "🔥",
+        "label": "Aggressive",
+        "desc": "Larger positions, wider stops, momentum plays",
+        "style": "red",
+        "bar": "▓▓▓▓▓",
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -141,38 +200,74 @@ def _interactive_select(portfolio_store: PortfolioStore) -> PortfolioRecord:
     Returns:
         The chosen or newly-created :class:`PortfolioRecord`.
     """
-    console.print(
-        Panel(
-            "[bold]Beavr AI — Portfolio Setup[/bold]",
-            border_style="cyan",
-            expand=False,
-        )
-    )
+    console.print()
+    console.print(Panel(
+        _BEAVER_LOGO,
+        title="[bold]Portfolio Setup[/bold]",
+        subtitle="[dim]Configure your trading personality[/dim]",
+        border_style="bright_cyan",
+        expand=False,
+        padding=(0, 2),
+    ))
 
     portfolios = portfolio_store.list_portfolios()
 
     if not portfolios:
-        console.print("\nNo existing portfolios found — let's create one.\n")
+        console.print()
+        console.print(
+            "  [dim]No existing portfolios found.[/dim]  "
+            "Let's set up your first one! 🚀"
+        )
+        console.print()
         return _interactive_create(portfolio_store)
 
-    console.print("\n[bold]Existing portfolios:[/bold]")
+    # Build a rich table for existing portfolios
+    console.print()
+    ptable = Table(
+        title="📂  Your Portfolios",
+        show_lines=False,
+        pad_edge=True,
+        expand=False,
+    )
+    ptable.add_column("#", style="bold cyan", justify="center", width=3)
+    ptable.add_column("Name", style="bold")
+    ptable.add_column("Mode")
+    ptable.add_column("Risk")
+    ptable.add_column("Trades", justify="right")
+    ptable.add_column("P&L", justify="right")
+    ptable.add_column("Status")
+
     for idx, pf in enumerate(portfolios, start=1):
         pnl = pf.realized_pnl
-        pnl_sign = "+" if pnl >= 0 else ""
-        status_style = "green" if pf.status == PortfolioStatus.ACTIVE else "yellow"
-        console.print(
-            f"  [cyan][{idx}][/cyan] {pf.name} "
-            f"({pf.mode.value}, [{status_style}]{pf.status.value}[/{status_style}], "
-            f"{pnl_sign}${pnl:,.2f})"
+        pnl_style = "green" if pnl >= 0 else "red"
+        status_icon = "🟢" if pf.status == PortfolioStatus.ACTIVE else "🟡"
+        mode_icon = "📝" if pf.mode == TradingMode.PAPER else "💰"
+        agg_bar = {"conservative": "🛡️", "moderate": "⚖️", "aggressive": "🔥"}.get(
+            pf.aggressiveness.value, "⚖️"
         )
-    console.print("  [cyan][N][/cyan] Create new portfolio\n")
+
+        ptable.add_row(
+            str(idx),
+            pf.name,
+            f"{mode_icon} {pf.mode.value}",
+            f"{agg_bar} {pf.aggressiveness.value}",
+            str(pf.total_trades),
+            f"[{pnl_style}]${pnl:+,.2f}[/{pnl_style}]",
+            f"{status_icon} {pf.status.value}",
+        )
+
+    console.print(ptable)
+    console.print()
+    console.print("  [bold bright_green]N[/bold bright_green]  ✨ Create new portfolio")
+    console.print()
 
     choice = typer.prompt(
-        "Select portfolio",
+        "  Select",
         default="N" if not portfolios else "1",
     )
 
     if choice.upper() == "N":
+        console.print()
         return _interactive_create(portfolio_store)
 
     try:
@@ -205,62 +300,102 @@ def _interactive_create(portfolio_store: PortfolioStore) -> PortfolioRecord:
     Returns:
         The newly-created :class:`PortfolioRecord`.
     """
-    console.print("[bold]Create New Portfolio[/bold]\n")
+    console.print(Rule("[bold bright_cyan]New Portfolio[/bold bright_cyan]", style="bright_cyan"))
+    console.print()
 
-    # --- Name ---
-    name = typer.prompt("Portfolio name")
+    # --- Step 1: Name ---
+    console.print("  [bold]Step 1/5[/bold]  [dim]Give your portfolio a name[/dim]")
+    name = typer.prompt("  📛 Name")
     if not name.strip():
         console.print("[red]Error:[/red] Name cannot be empty.")
         raise typer.Exit(1)
     name = name.strip()
 
-    # Check uniqueness
     if portfolio_store.get_portfolio_by_name(name) is not None:
         console.print(f"[red]Error:[/red] Portfolio [bold]{name}[/bold] already exists.")
         raise typer.Exit(1)
 
-    # --- Mode ---
-    console.print("  [cyan][1][/cyan] Paper trading")
-    console.print("  [cyan][2][/cyan] Live trading")
-    mode_choice = typer.prompt("Select mode", default="1")
-    if mode_choice == "1":
-        mode = TradingMode.PAPER
-    elif mode_choice == "2":
-        mode = TradingMode.LIVE
-    else:
+    console.print()
+
+    # --- Step 2: Mode ---
+    console.print("  [bold]Step 2/5[/bold]  [dim]Choose trading mode[/dim]")
+    console.print()
+    for key, info in _MODE_INFO.items():
+        console.print(
+            f"   [bold {info['style']}]{key}[/bold {info['style']}]  "
+            f"{info['icon']}  [bold]{info['label']}[/bold]"
+        )
+        console.print(f"      [dim]{info['desc']}[/dim]")
+    console.print()
+    mode_choice = typer.prompt("  Select mode", default="1")
+
+    if mode_choice not in _MODE_INFO:
         console.print(f"[red]Error:[/red] Invalid mode selection: {mode_choice}")
         raise typer.Exit(1)
 
-    # --- Aggressiveness ---
-    console.print("  [cyan][1][/cyan] Conservative")
-    console.print("  [cyan][2][/cyan] Moderate")
-    console.print("  [cyan][3][/cyan] Aggressive")
-    agg_choice = typer.prompt("Select aggressiveness", default="2")
-    agg_map = {
-        "1": Aggressiveness.CONSERVATIVE,
-        "2": Aggressiveness.MODERATE,
-        "3": Aggressiveness.AGGRESSIVE,
-    }
-    if agg_choice not in agg_map:
-        console.print(f"[red]Error:[/red] Invalid aggressiveness selection: {agg_choice}")
-        raise typer.Exit(1)
-    aggressiveness = agg_map[agg_choice]
-
-    # --- Directives ---
+    mode = _MODE_INFO[mode_choice]["mode"]
     console.print(
-        "\nEnter trading directives (one per line, empty line to finish):"
+        f"  → [{_MODE_INFO[mode_choice]['style']}]"
+        f"{_MODE_INFO[mode_choice]['icon']}  {_MODE_INFO[mode_choice]['label']}"
+        f"[/{_MODE_INFO[mode_choice]['style']}]"
     )
+    console.print()
+
+    # --- Step 3: Aggressiveness ---
+    console.print("  [bold]Step 3/5[/bold]  [dim]Set your risk appetite[/dim]")
+    console.print()
+    for key, info in _AGG_INFO.items():
+        console.print(
+            f"   [bold {info['style']}]{key}[/bold {info['style']}]  "
+            f"{info['icon']}  [bold]{info['label']}[/bold]  "
+            f"[{info['style']}]{info['bar']}[/{info['style']}]"
+        )
+        console.print(f"      [dim]{info['desc']}[/dim]")
+    console.print()
+    agg_choice = typer.prompt("  Select risk level", default="2")
+
+    if agg_choice not in _AGG_INFO:
+        console.print(f"[red]Error:[/red] Invalid selection: {agg_choice}")
+        raise typer.Exit(1)
+
+    aggressiveness = _AGG_INFO[agg_choice]["agg"]
+    console.print(
+        f"  → [{_AGG_INFO[agg_choice]['style']}]"
+        f"{_AGG_INFO[agg_choice]['icon']}  {_AGG_INFO[agg_choice]['label']}  "
+        f"{_AGG_INFO[agg_choice]['bar']}"
+        f"[/{_AGG_INFO[agg_choice]['style']}]"
+    )
+    console.print()
+
+    # --- Step 4: Directives ---
+    console.print("  [bold]Step 4/5[/bold]  [dim]Define your AI trading personality[/dim]")
+    console.print(
+        "  [dim]Tell the AI how to trade. Be specific about strategies,\n"
+        "  risk tolerance, instruments, and style. Empty line to finish.[/dim]"
+    )
+    console.print()
+
     directives: list[str] = []
+    n = 1
     while True:
-        line = typer.prompt("", default="", show_default=False)
+        line = typer.prompt(f"  💬 [{n}]", default="", show_default=False)
         if not line.strip():
             break
         directives.append(line.strip())
+        n += 1
 
-    # --- Capital ---
-    capital_str = typer.prompt("Initial capital ($)", default=str(_DEFAULT_CAPITAL))
+    if directives:
+        console.print(f"  [green]✓[/green] {len(directives)} directive(s) captured")
+    else:
+        console.print("  [dim]No directives — AI will use default strategy.[/dim]")
+    console.print()
+
+    # --- Step 5: Capital ---
+    console.print("  [bold]Step 5/5[/bold]  [dim]Set your capital allocation[/dim]")
+    console.print()
+    capital_str = typer.prompt("  💵 Initial capital ($)", default=str(_DEFAULT_CAPITAL))
     try:
-        capital = Decimal(capital_str)
+        capital = Decimal(capital_str.replace(",", ""))
         if capital <= 0:
             raise InvalidOperation
     except (InvalidOperation, ValueError):
@@ -268,7 +403,7 @@ def _interactive_create(portfolio_store: PortfolioStore) -> PortfolioRecord:
         raise typer.Exit(1) from None
 
     capital_pct_str = typer.prompt(
-        "Capital % to allocate for trading",
+        "  📊 Trading allocation (%)",
         default=str(_DEFAULT_CAPITAL_PCT),
     )
     try:
@@ -280,20 +415,49 @@ def _interactive_create(portfolio_store: PortfolioStore) -> PortfolioRecord:
         raise typer.Exit(1) from None
 
     # --- Summary ---
+    console.print()
     allocated = capital * Decimal(str(capital_pct)) / Decimal("100")
-    dir_display = "\n".join(f"  - {d}" for d in directives) if directives else "  (none)"
-    summary = (
-        f"[bold]Name:[/bold]            {name}\n"
-        f"[bold]Mode:[/bold]            {mode.value}\n"
-        f"[bold]Aggressiveness:[/bold]  {aggressiveness.value}\n"
-        f"[bold]Directives:[/bold]\n{dir_display}\n"
-        f"[bold]Capital:[/bold]         ${capital:,.2f}\n"
-        f"[bold]Allocated:[/bold]       ${allocated:,.2f} ({capital_pct}%)"
-    )
-    console.print(Panel(summary, title="New Portfolio Summary", border_style="green"))
+    reserved = capital - allocated
 
-    if not typer.confirm("Create this portfolio?", default=True):
-        console.print("[yellow]Cancelled.[/yellow]")
+    mode_info = next(v for v in _MODE_INFO.values() if v["mode"] == mode)
+    agg_info = next(v for v in _AGG_INFO.values() if v["agg"] == aggressiveness)
+
+    # Build the left column: config
+    config_text = Text.from_markup(
+        f"  [bold]Name:[/bold]    {name}\n"
+        f"  [bold]Mode:[/bold]    {mode_info['icon']}  [{mode_info['style']}]{mode_info['label']}[/{mode_info['style']}]\n"
+        f"  [bold]Risk:[/bold]    {agg_info['icon']}  [{agg_info['style']}]{agg_info['label']}  {agg_info['bar']}[/{agg_info['style']}]"
+    )
+
+    # Build the right column: capital
+    capital_text = Text.from_markup(
+        f"  [bold]Capital:[/bold]    ${capital:>12,.2f}\n"
+        f"  [bold]Trading:[/bold]    [green]${allocated:>12,.2f}[/green] ({capital_pct:.0f}%)\n"
+        f"  [bold]Reserved:[/bold]   [dim]${reserved:>12,.2f}[/dim]"
+    )
+
+    console.print(Panel(
+        Columns([config_text, capital_text], padding=(0, 4)),
+        title="[bold]📋  Portfolio Summary[/bold]",
+        border_style="bright_green",
+        expand=False,
+        padding=(1, 2),
+    ))
+
+    # Directives sub-panel
+    if directives:
+        dir_lines = "\n".join(f"  [dim]•[/dim] {d}" for d in directives)
+        console.print(Panel(
+            dir_lines,
+            title="[bold]🧠  AI Directives[/bold]",
+            border_style="bright_blue",
+            expand=False,
+            padding=(0, 2),
+        ))
+
+    console.print()
+    if not typer.confirm("  Create this portfolio?", default=True):
+        console.print("  [yellow]Cancelled.[/yellow]")
         raise typer.Exit(0)
 
     portfolio_id = portfolio_store.create_portfolio(
@@ -310,7 +474,17 @@ def _interactive_create(portfolio_store: PortfolioStore) -> PortfolioRecord:
         console.print("[red]Error:[/red] Failed to retrieve created portfolio.")
         raise typer.Exit(1)
 
-    console.print(f"\n[green]✓[/green] Portfolio [bold]{name}[/bold] created (id={portfolio_id})")
+    console.print()
+    console.print(Panel(
+        f"  [bold green]✅  Portfolio created![/bold green]\n\n"
+        f"  [bold]{name}[/bold]  •  {mode_info['icon']} {mode.value}  •  "
+        f"{agg_info['icon']} {aggressiveness.value}\n"
+        f"  ID: [dim]{portfolio_id}[/dim]",
+        border_style="green",
+        expand=False,
+        padding=(0, 2),
+    ))
+    console.print()
     return record
 
 
@@ -392,10 +566,14 @@ def _create_from_flags(
         console.print("[red]Error:[/red] Failed to retrieve created portfolio.")
         raise typer.Exit(1)
 
+    mode_icon = "📝" if validated_mode == TradingMode.PAPER else "💰"
+    agg_icon = {"conservative": "🛡️", "moderate": "⚖️", "aggressive": "🔥"}.get(
+        validated_agg.value, "⚖️"
+    )
     console.print(
-        f"[green]✓[/green] Portfolio [bold]{name}[/bold] created "
-        f"(mode={validated_mode.value}, aggressiveness={validated_agg.value}, "
-        f"capital=${resolved_capital:,.2f})"
+        f"\n[green]✅[/green] Portfolio [bold]{name}[/bold] created  "
+        f"{mode_icon} {validated_mode.value}  {agg_icon} {validated_agg.value}  "
+        f"💵 ${resolved_capital:,.2f}"
     )
     return record
 
@@ -406,8 +584,26 @@ def _create_from_flags(
 
 
 def _print_resume(record: PortfolioRecord) -> None:
-    """Print a brief resume message for an existing portfolio."""
-    console.print(
-        f"[green]✓[/green] Resuming portfolio [bold]{record.name}[/bold] "
-        f"(id={record.id}, mode={record.mode.value}, status={record.status.value})"
+    """Print a rich resume panel for an existing portfolio."""
+    mode_icon = "📝" if record.mode == TradingMode.PAPER else "💰"
+    agg_icon = {"conservative": "🛡️", "moderate": "⚖️", "aggressive": "🔥"}.get(
+        record.aggressiveness.value, "⚖️"
     )
+    pnl = record.realized_pnl
+    pnl_style = "green" if pnl >= 0 else "red"
+    status_icon = "🟢" if record.status == PortfolioStatus.ACTIVE else "🟡"
+
+    console.print()
+    console.print(Panel(
+        f"  [bold green]▶  Resuming portfolio[/bold green]\n\n"
+        f"  [bold]{record.name}[/bold]  •  {mode_icon} {record.mode.value}  •  "
+        f"{agg_icon} {record.aggressiveness.value}  •  {status_icon} {record.status.value}\n"
+        f"  Capital: ${record.initial_capital:,.2f}  |  "
+        f"P&L: [{pnl_style}]${pnl:+,.2f}[/{pnl_style}]  |  "
+        f"Trades: {record.total_trades}\n"
+        f"  ID: [dim]{record.id}[/dim]",
+        border_style="cyan",
+        expand=False,
+        padding=(0, 2),
+    ))
+    console.print()

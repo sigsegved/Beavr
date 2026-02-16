@@ -58,6 +58,36 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
+# DECISION STYLE MAP (used by history + audit trail)
+# =============================================================================
+
+_DECISION_STYLES: dict[str, str] = {
+    "thesis_created": "blue",
+    "dd_approved": "green",
+    "dd_conditional": "yellow",
+    "dd_rejected": "red",
+    "trade_entered": "bold green",
+    "trade_skipped": "dim",
+    "position_exit_target": "green",
+    "position_exit_stop": "red",
+    "position_exit_time": "yellow",
+    "position_exit_invalidated": "red",
+    "position_exit_manual": "blue",
+    "position_partial_exit": "yellow",
+    "phase_transition": "dim",
+    "circuit_breaker_triggered": "bold red",
+    "circuit_breaker_reset": "dim green",
+    "earnings_scan": "magenta",
+    "morning_scan": "cyan",
+    "news_alert": "yellow",
+    "research_cycle": "dim",
+    "portfolio_paused": "yellow",
+    "portfolio_resumed": "green",
+    "snapshot_captured": "dim",
+}
+
+
+# =============================================================================
 # STOCK QUALITY FILTERS
 # =============================================================================
 
@@ -872,80 +902,123 @@ def analyze(
 @ai_app.command()
 def history(
     limit: int = typer.Option(20, "--limit", "-n", help="Number of records to show"),
-    show_open: bool = typer.Option(False, "--open", "-o", help="Show only open positions"),
     portfolio: Optional[str] = typer.Option(None, "--portfolio", "-p", help="Filter by portfolio name"),
     audit: bool = typer.Option(False, "--audit", "-a", help="Show full decision audit trail"),
 ) -> None:
-    """Show AI trading history, performance, and audit trail."""
+    """Show AI trading history, performance, and audit trail.
+
+    Displays portfolio-scoped history from the decision store.  After
+    a reset, history is clean — only data belonging to active
+    portfolios is shown.
+
+    Default view shows trade-related decisions (entries, exits, DD).
+    Use ``--audit`` for the full decision trail including phase
+    transitions, circuit-breakers, and scans.
+    """
     from beavr.db.factory import create_sqlite_stores
+    from beavr.models.portfolio_record import DecisionType
 
     stores = create_sqlite_stores()
 
-    # ── Audit trail mode ──────────────────────────────────────────────
+    # ── Audit trail mode (everything) ─────────────────────────────────
     if audit:
         _show_audit_trail(stores, portfolio, limit)
         return
 
-    # ── Legacy position-based history ─────────────────────────────────
-    investor = get_investor()
-
-    if show_open:
-        positions = investor.positions_repo.get_open_positions()
-        title = "Open AI Positions"
-    else:
-        positions = investor.positions_repo.get_all_positions(limit=limit)
-        title = f"AI Trading History (last {limit})"
-
-    if not positions:
-        console.print("[dim]No AI trading history found.[/dim]")
+    # ── Default: portfolio summary + trade decisions ──────────────────
+    portfolios = stores.portfolios.list_portfolios()
+    if not portfolios:
+        console.print("[dim]No portfolios found. Run [bold]bvr ai auto[/bold] to get started.[/dim]")
         raise typer.Exit(0)
 
-    table = Table(title=title)
-    table.add_column("Symbol", style="cyan")
-    table.add_column("Status")
-    table.add_column("Entry", justify="right")
-    table.add_column("Exit", justify="right")
-    table.add_column("Stop", justify="right")
-    table.add_column("Target", justify="right")
-    table.add_column("P/L", justify="right")
-    table.add_column("Date")
+    # Resolve portfolio filter
+    if portfolio:
+        matches = [p for p in portfolios if p.name.lower() == portfolio.lower()]
+        if not matches:
+            console.print(f"[red]Portfolio '{portfolio}' not found.[/red]")
+            raise typer.Exit(1)
+        portfolios = matches
 
-    for pos in positions:
-        status_style = {
-            "open": "yellow",
-            "closed_target": "green",
-            "closed_stop": "red",
-            "closed_manual": "blue",
-        }.get(pos.status, "white")
+    # Trade-relevant decision types
+    _TRADE_TYPES = {
+        DecisionType.THESIS_CREATED,
+        DecisionType.DD_APPROVED,
+        DecisionType.DD_REJECTED,
+        DecisionType.DD_CONDITIONAL,
+        DecisionType.TRADE_ENTERED,
+        DecisionType.TRADE_SKIPPED,
+        DecisionType.POSITION_EXIT_TARGET,
+        DecisionType.POSITION_EXIT_STOP,
+        DecisionType.POSITION_EXIT_TIME,
+        DecisionType.POSITION_EXIT_INVALIDATED,
+        DecisionType.POSITION_EXIT_MANUAL,
+        DecisionType.POSITION_PARTIAL_EXIT,
+    }
 
-        pnl_str = ""
-        if pos.pnl is not None:
-            pnl_style = "green" if pos.pnl >= 0 else "red"
-            pnl_str = f"[{pnl_style}]${pos.pnl:.2f} ({pos.pnl_pct:+.1f}%)[/{pnl_style}]"
+    for pf in portfolios:
+        # ── Portfolio header ──────────────────────────────────────
+        pnl_style = "green" if pf.realized_pnl >= 0 else "red"
+        win_rate = pf.win_rate
+        wr_style = "green" if win_rate >= 50 else ("yellow" if win_rate >= 30 else "red")
 
-        table.add_row(
-            pos.symbol,
-            f"[{status_style}]{pos.status}[/{status_style}]",
-            f"${pos.entry_price:.2f}",
-            f"${pos.exit_price:.2f}" if pos.exit_price else "-",
-            f"-{pos.stop_loss_pct}%",
-            f"+{pos.target_pct}%",
-            pnl_str,
-            pos.entry_timestamp.strftime("%Y-%m-%d"),
-        )
+        header_lines = [
+            f"[bold]Mode:[/bold] {pf.mode.value}  |  "
+            f"[bold]Risk:[/bold] {pf.aggressiveness.value}  |  "
+            f"[bold]Status:[/bold] [{'green' if pf.is_active else 'dim'}]{pf.status.value}[/]",
+            "",
+            f"[bold]Capital:[/bold]  ${pf.initial_capital:,.2f}",
+            f"[bold]P&L:[/bold]     [{pnl_style}]${pf.realized_pnl:,.2f}[/{pnl_style}]",
+            f"[bold]Trades:[/bold]  {pf.total_trades}  "
+            f"([green]{pf.winning_trades}W[/green] / [red]{pf.losing_trades}L[/red])  "
+            f"[{wr_style}]{win_rate:.0f}% win rate[/{wr_style}]",
+        ]
+        console.print(Panel(
+            "\n".join(header_lines),
+            title=f"📊  {pf.name}",
+            border_style="cyan",
+            expand=False,
+        ))
 
-    console.print(table)
+        # ── Recent trade decisions ────────────────────────────────
+        all_decisions = stores.decisions.get_decisions(pf.id, limit=limit * 3)
+        trade_decisions = [d for d in all_decisions if d.decision_type in _TRADE_TYPES][:limit]
 
-    summary = investor.positions_repo.get_performance_summary()
-    console.print()
-    console.print(Panel.fit(
-        f"[bold]Total Positions:[/bold] {summary['total_positions']}\n"
-        f"[bold]Open:[/bold] {summary['open_positions']} | [bold]Closed:[/bold] {summary['closed_positions']}\n"
-        f"[bold]Win Rate:[/bold] {summary['win_rate']:.1f}% ({summary['winning_trades']}W / {summary['losing_trades']}L)\n"
-        f"[bold]Total P/L:[/bold] ${summary['total_pnl']:.2f}\n"
-        f"[bold]Avg P/L:[/bold] {summary['avg_pnl_pct']:.1f}%",
-        title="📊 Performance Summary",
-    ))
+        if not trade_decisions:
+            console.print("  [dim]No trade activity yet.[/dim]\n")
+            continue
+
+        table = Table(show_header=True, header_style="bold", expand=False)
+        table.add_column("Date", style="dim", width=16)
+        table.add_column("Action", width=22)
+        table.add_column("Symbol", style="cyan", width=8)
+        table.add_column("Details")
+        table.add_column("Amount", justify="right")
+        table.add_column("P/L", justify="right")
+
+        for d in trade_decisions:
+            style = _DECISION_STYLES.get(d.decision_type.value, "white")
+            label = d.decision_type.value.replace("_", " ").title()
+
+            amt = f"${d.amount:,.2f}" if d.amount else ""
+            pnl = ""
+            if d.outcome_details and d.outcome_details.get("pnl"):
+                pnl_val = float(d.outcome_details["pnl"])
+                pnl_s = "green" if pnl_val >= 0 else "red"
+                pnl = f"[{pnl_s}]${pnl_val:+,.2f}[/{pnl_s}]"
+
+            reason = (d.reasoning or d.action)[:45]
+
+            table.add_row(
+                d.timestamp.strftime("%m/%d %H:%M"),
+                f"[{style}]{label}[/{style}]",
+                d.symbol or "",
+                reason,
+                amt,
+                pnl,
+            )
+
+        console.print(table)
+        console.print()
 
 
 def _show_audit_trail(stores: Any, portfolio_name: Optional[str], limit: int) -> None:  # noqa: C901
@@ -994,29 +1067,6 @@ def _show_audit_trail(stores: Any, portfolio_name: Optional[str], limit: int) ->
     console.print()
 
     # Decision audit trail
-    _DECISION_STYLES: dict[str, str] = {
-        "thesis_created": "blue",
-        "dd_approved": "green",
-        "dd_conditional": "yellow",
-        "dd_rejected": "red",
-        "trade_entered": "bold green",
-        "position_exit_target": "green",
-        "position_exit_stop": "red",
-        "position_exit_time": "yellow",
-        "position_exit_invalidated": "red",
-        "position_exit_manual": "blue",
-        "phase_transition": "dim",
-        "circuit_breaker_triggered": "bold red",
-        "circuit_breaker_reset": "dim green",
-        "earnings_scan": "magenta",
-        "morning_scan": "cyan",
-        "news_alert": "yellow",
-        "skip_trade": "dim",
-        "watchlist_add": "cyan",
-        "watchlist_remove": "dim",
-        "snapshot_captured": "dim",
-    }
-
     for pid in target_ids:
         decisions = stores.decisions.get_decisions(pid, limit=limit)
         if not decisions:

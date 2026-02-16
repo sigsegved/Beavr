@@ -396,3 +396,142 @@ class TestShowAuditTrailHelper:
         )
         with pytest.raises(click.exceptions.Exit):
             _show_audit_trail(stores, "Nonexistent", 20)
+
+
+# ===================================================================
+# History default view (portfolio-scoped, post-reset clean)
+# ===================================================================
+
+
+class TestHistoryPortfolioScoped:
+    """Tests that ``bvr ai history`` is fully portfolio-scoped.
+
+    After a reset, the default history view should show nothing.
+    """
+
+    def test_history_empty_after_reset(self) -> None:
+        """No portfolios → no history, clean exit."""
+        import click
+
+        from beavr.cli.ai import history as history_cmd
+
+        stores = create_sqlite_stores(":memory:")
+        # Create then delete → simulates reset
+        pid = stores.portfolios.create_portfolio(
+            name="Gone", mode="paper", initial_capital=Decimal("1000"),
+            config_snapshot={}, aggressiveness="moderate", directives=[],
+        )
+        stores.portfolios.delete_portfolio(pid)
+
+        # Monkey-patch create_sqlite_stores to return our in-memory stores
+        import beavr.db.factory as factory_mod
+
+        _original = factory_mod.create_sqlite_stores
+        factory_mod.create_sqlite_stores = lambda **_kw: stores
+        try:
+
+            with pytest.raises(click.exceptions.Exit):
+                history_cmd(limit=20, portfolio=None, audit=False)
+        finally:
+            factory_mod.create_sqlite_stores = _original
+
+    def test_history_shows_only_portfolio_decisions(self) -> None:
+        """History should only show decisions from portfolio stores."""
+        from beavr.models.portfolio_record import PortfolioDecision
+
+        stores = create_sqlite_stores(":memory:")
+        pid = stores.portfolios.create_portfolio(
+            name="Active", mode="paper", initial_capital=Decimal("10000"),
+            config_snapshot={}, aggressiveness="moderate", directives=[],
+        )
+
+        # Add a trade decision
+        stores.decisions.log_decision(PortfolioDecision(
+            portfolio_id=pid,
+            phase="market_hours",
+            decision_type=DecisionType.TRADE_ENTERED,
+            action="buy AAPL",
+            symbol="AAPL",
+            amount=Decimal("500"),
+        ))
+
+        # Should not raise — just prints. If it tried the legacy repo, it would crash.
+        import beavr.db.factory as factory_mod
+
+        _original = factory_mod.create_sqlite_stores
+        factory_mod.create_sqlite_stores = lambda **_kw: stores
+        try:
+            from beavr.cli.ai import history as history_cmd
+            # This should complete without error — no legacy repo access
+            history_cmd(limit=20, portfolio=None, audit=False)
+        finally:
+            factory_mod.create_sqlite_stores = _original
+
+    def test_history_filters_by_portfolio_name(self) -> None:
+        """--portfolio flag should filter to that portfolio only."""
+        from beavr.models.portfolio_record import PortfolioDecision
+
+        stores = create_sqlite_stores(":memory:")
+        pid1 = stores.portfolios.create_portfolio(
+            name="Alpha", mode="paper", initial_capital=Decimal("1000"),
+            config_snapshot={}, aggressiveness="moderate", directives=[],
+        )
+        pid2 = stores.portfolios.create_portfolio(
+            name="Beta", mode="paper", initial_capital=Decimal("1000"),
+            config_snapshot={}, aggressiveness="moderate", directives=[],
+        )
+
+        stores.decisions.log_decision(PortfolioDecision(
+            portfolio_id=pid1, phase="market_hours",
+            decision_type=DecisionType.TRADE_ENTERED,
+            action="buy", symbol="SPY",
+        ))
+        stores.decisions.log_decision(PortfolioDecision(
+            portfolio_id=pid2, phase="market_hours",
+            decision_type=DecisionType.TRADE_ENTERED,
+            action="buy", symbol="QQQ",
+        ))
+
+        import beavr.db.factory as factory_mod
+
+        _original = factory_mod.create_sqlite_stores
+        factory_mod.create_sqlite_stores = lambda **_kw: stores
+        try:
+            from beavr.cli.ai import history as history_cmd
+            # Should show only Alpha, not crash
+            history_cmd(limit=20, portfolio="Alpha", audit=False)
+        finally:
+            factory_mod.create_sqlite_stores = _original
+
+    def test_history_unknown_portfolio_exits(self) -> None:
+        """Unknown --portfolio name should exit with error."""
+        import click
+
+        stores = create_sqlite_stores(":memory:")
+        stores.portfolios.create_portfolio(
+            name="Real", mode="paper", initial_capital=Decimal("1000"),
+            config_snapshot={}, aggressiveness="moderate", directives=[],
+        )
+
+        import beavr.db.factory as factory_mod
+
+        _original = factory_mod.create_sqlite_stores
+        factory_mod.create_sqlite_stores = lambda **_kw: stores
+        try:
+            from beavr.cli.ai import history as history_cmd
+
+            with pytest.raises(click.exceptions.Exit):
+                history_cmd(limit=20, portfolio="Ghost", audit=False)
+        finally:
+            factory_mod.create_sqlite_stores = _original
+
+    def test_decision_styles_module_level(self) -> None:
+        """_DECISION_STYLES should be a module-level dict covering all types."""
+        from beavr.cli.ai import _DECISION_STYLES
+
+        assert isinstance(_DECISION_STYLES, dict)
+        # Should cover key trade-related types
+        assert "trade_entered" in _DECISION_STYLES
+        assert "dd_approved" in _DECISION_STYLES
+        assert "thesis_created" in _DECISION_STYLES
+        assert "circuit_breaker_triggered" in _DECISION_STYLES
