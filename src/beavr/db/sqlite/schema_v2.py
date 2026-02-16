@@ -190,7 +190,125 @@ CREATE TABLE IF NOT EXISTS watchlist (
 
 CREATE INDEX IF NOT EXISTS idx_watchlist_active ON watchlist(active);
 CREATE INDEX IF NOT EXISTS idx_watchlist_priority ON watchlist(priority);
+
+-- =========================================================================
+-- V3 → V4: Portfolio lifecycle, audit trail, and daily snapshots
+-- =========================================================================
+
+-- portfolios: Named trading sessions with config, personality, and stats
+CREATE TABLE IF NOT EXISTS portfolios (
+    id TEXT PRIMARY KEY,                     -- UUID (short)
+    name TEXT NOT NULL UNIQUE,               -- User-friendly name
+    created_at TEXT NOT NULL,                -- ISO timestamp
+    closed_at TEXT,                          -- NULL = active
+    status TEXT NOT NULL DEFAULT 'active',   -- active | paused | closed
+
+    -- Trading mode (NEVER mix paper and live)
+    mode TEXT NOT NULL,                      -- 'paper' | 'live'
+
+    -- Capital allocation
+    initial_capital TEXT NOT NULL,           -- Decimal as string
+    allocated_capital TEXT NOT NULL,         -- Decimal (capital_pct)
+    current_cash TEXT NOT NULL,              -- Remaining uninvested cash
+
+    -- Configuration snapshot (frozen at creation time)
+    config_snapshot TEXT NOT NULL,           -- JSON dump of V2Config
+
+    -- AI Personality / Directives
+    aggressiveness TEXT NOT NULL DEFAULT 'moderate',
+    directives TEXT,                         -- JSON array of strings
+
+    -- Running totals (updated per trade)
+    total_invested TEXT NOT NULL DEFAULT '0',
+    total_returned TEXT NOT NULL DEFAULT '0',
+    realized_pnl TEXT NOT NULL DEFAULT '0',
+    total_trades INTEGER NOT NULL DEFAULT 0,
+    winning_trades INTEGER NOT NULL DEFAULT 0,
+    losing_trades INTEGER NOT NULL DEFAULT 0,
+
+    -- Risk state
+    peak_value TEXT NOT NULL DEFAULT '0',
+    max_drawdown_pct REAL NOT NULL DEFAULT 0.0,
+
+    -- Metadata
+    notes TEXT
+);
+
+-- portfolio_decisions: Full audit trail of every AI decision
+CREATE TABLE IF NOT EXISTS portfolio_decisions (
+    id TEXT PRIMARY KEY,                     -- UUID (short)
+    portfolio_id TEXT NOT NULL,              -- FK → portfolios
+    timestamp TEXT NOT NULL,                 -- ISO timestamp
+    phase TEXT NOT NULL,                     -- Orchestrator phase
+    decision_type TEXT NOT NULL,             -- See DecisionType enum
+    symbol TEXT,                             -- Relevant symbol (nullable)
+
+    -- Linked entities (nullable)
+    thesis_id TEXT,
+    dd_report_id TEXT,
+    position_id TEXT,
+    event_id TEXT,
+
+    -- Decision data
+    action TEXT NOT NULL,                    -- buy, sell, skip, hold, etc.
+    reasoning TEXT,
+    confidence REAL,
+
+    -- Financial impact
+    amount TEXT,                             -- Decimal
+    shares TEXT,                             -- Decimal
+    price TEXT,                              -- Decimal
+
+    -- Outcome (filled in later)
+    outcome TEXT,                            -- success | failure | pending
+    outcome_details TEXT,                    -- JSON
+
+    FOREIGN KEY (portfolio_id) REFERENCES portfolios(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_portfolio_decisions_portfolio ON portfolio_decisions(portfolio_id);
+CREATE INDEX IF NOT EXISTS idx_portfolio_decisions_type ON portfolio_decisions(decision_type);
+CREATE INDEX IF NOT EXISTS idx_portfolio_decisions_symbol ON portfolio_decisions(symbol);
+CREATE INDEX IF NOT EXISTS idx_portfolio_decisions_timestamp ON portfolio_decisions(timestamp);
+
+-- portfolio_snapshots: Daily equity-curve data
+CREATE TABLE IF NOT EXISTS portfolio_snapshots (
+    id TEXT PRIMARY KEY,                    -- UUID (short)
+    portfolio_id TEXT NOT NULL,             -- FK → portfolios
+    snapshot_date TEXT NOT NULL,            -- YYYY-MM-DD
+    timestamp TEXT NOT NULL,               -- ISO timestamp
+
+    -- Values
+    portfolio_value TEXT NOT NULL,          -- Decimal
+    cash TEXT NOT NULL,
+    positions_value TEXT NOT NULL,
+
+    -- Daily P&L
+    daily_pnl TEXT NOT NULL DEFAULT '0',
+    daily_pnl_pct REAL NOT NULL DEFAULT 0.0,
+
+    -- Cumulative
+    cumulative_pnl TEXT NOT NULL DEFAULT '0',
+    cumulative_pnl_pct REAL NOT NULL DEFAULT 0.0,
+
+    -- Positions count
+    open_positions INTEGER NOT NULL DEFAULT 0,
+    trades_today INTEGER NOT NULL DEFAULT 0,
+
+    FOREIGN KEY (portfolio_id) REFERENCES portfolios(id),
+    UNIQUE(portfolio_id, snapshot_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_portfolio ON portfolio_snapshots(portfolio_id);
+CREATE INDEX IF NOT EXISTS idx_portfolio_snapshots_date ON portfolio_snapshots(snapshot_date);
 """
 
+# Migration SQL for adding portfolio_id to existing tables.
+# Wrapped in individual statements so failures (column already exists) are non-fatal.
+SCHEMA_V2_MIGRATION_SQL = [
+    "ALTER TABLE trade_theses ADD COLUMN portfolio_id TEXT",
+    "ALTER TABLE ai_positions_v2 ADD COLUMN portfolio_id TEXT",
+]
+
 # Schema version for v2 additions
-SCHEMA_V2_VERSION = 3
+SCHEMA_V2_VERSION = 4

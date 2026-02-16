@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Generator, Optional, Union
 
 from beavr.db.sqlite.schema import SCHEMA_SQL
-from beavr.db.sqlite.schema_v2 import SCHEMA_V2_SQL
+from beavr.db.sqlite.schema_v2 import SCHEMA_V2_MIGRATION_SQL, SCHEMA_V2_SQL
 
 if TYPE_CHECKING:
     from sqlite3 import Connection
@@ -50,11 +50,17 @@ class Database:
         self._init_schema()
 
     def _init_schema(self) -> None:
-        """Create tables if they don't exist."""
+        """Create tables if they don't exist and run migrations."""
         with self.connect() as conn:
             conn.executescript(SCHEMA_SQL)
             # Also apply v2 schema for AI Investor thesis support
             conn.executescript(SCHEMA_V2_SQL)
+            # Run column-addition migrations (silently ignore if already applied)
+            for stmt in SCHEMA_V2_MIGRATION_SQL:
+                try:
+                    conn.execute(stmt)
+                except Exception:  # noqa: BLE001
+                    pass  # Column already exists
 
     @contextmanager
     def connect(self) -> Generator[Connection, None, None]:

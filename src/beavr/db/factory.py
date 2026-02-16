@@ -9,7 +9,10 @@ if TYPE_CHECKING:
     from beavr.db.protocols import (
         BarCacheStore,
         DDReportStore,
+        DecisionStore,
         EventStore,
+        PortfolioStore,
+        SnapshotStore,
         ThesisStore,
     )
 
@@ -27,6 +30,9 @@ class StoreBundle:
     dd_reports: DDReportStore
     events: EventStore
     bar_cache: BarCacheStore
+    portfolios: PortfolioStore
+    decisions: DecisionStore
+    snapshots: SnapshotStore
 
 
 def create_sqlite_stores(db_path: Optional[str] = None) -> StoreBundle:
@@ -44,6 +50,11 @@ def create_sqlite_stores(db_path: Optional[str] = None) -> StoreBundle:
     from beavr.db.sqlite.connection import Database
     from beavr.db.sqlite.dd_report_store import SQLiteDDReportStore
     from beavr.db.sqlite.event_store import SQLiteEventStore
+    from beavr.db.sqlite.portfolio_store import (
+        SQLiteDecisionStore,
+        SQLitePortfolioStore,
+        SQLiteSnapshotStore,
+    )
     from beavr.db.sqlite.thesis_store import SQLiteThesisStore
 
     db = Database(db_path)
@@ -52,4 +63,7 @@ def create_sqlite_stores(db_path: Optional[str] = None) -> StoreBundle:
         dd_reports=SQLiteDDReportStore(db),
         events=SQLiteEventStore(db),
         bar_cache=SQLiteBarCacheStore(db),
+        portfolios=SQLitePortfolioStore(db),
+        decisions=SQLiteDecisionStore(db),
+        snapshots=SQLiteSnapshotStore(db),
     )
