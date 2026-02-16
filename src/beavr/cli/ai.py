@@ -27,7 +27,7 @@ import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from zoneinfo import ZoneInfo
 
 import typer
@@ -871,13 +871,24 @@ def analyze(
 
 @ai_app.command()
 def history(
-    limit: int = typer.Option(20, "--limit", "-n", help="Number of positions to show"),
+    limit: int = typer.Option(20, "--limit", "-n", help="Number of records to show"),
     show_open: bool = typer.Option(False, "--open", "-o", help="Show only open positions"),
+    portfolio: Optional[str] = typer.Option(None, "--portfolio", "-p", help="Filter by portfolio name"),
+    audit: bool = typer.Option(False, "--audit", "-a", help="Show full decision audit trail"),
 ) -> None:
-    """Show AI trading history and performance."""
+    """Show AI trading history, performance, and audit trail."""
+    from beavr.db.factory import create_sqlite_stores
+
+    stores = create_sqlite_stores()
+
+    # ── Audit trail mode ──────────────────────────────────────────────
+    if audit:
+        _show_audit_trail(stores, portfolio, limit)
+        return
+
+    # ── Legacy position-based history ─────────────────────────────────
     investor = get_investor()
 
-    # Get positions
     if show_open:
         positions = investor.positions_repo.get_open_positions()
         title = "Open AI Positions"
@@ -889,7 +900,6 @@ def history(
         console.print("[dim]No AI trading history found.[/dim]")
         raise typer.Exit(0)
 
-    # Show positions table
     table = Table(title=title)
     table.add_column("Symbol", style="cyan")
     table.add_column("Status")
@@ -926,7 +936,6 @@ def history(
 
     console.print(table)
 
-    # Show summary
     summary = investor.positions_repo.get_performance_summary()
     console.print()
     console.print(Panel.fit(
@@ -937,6 +946,224 @@ def history(
         f"[bold]Avg P/L:[/bold] {summary['avg_pnl_pct']:.1f}%",
         title="📊 Performance Summary",
     ))
+
+
+def _show_audit_trail(stores: Any, portfolio_name: Optional[str], limit: int) -> None:  # noqa: C901
+    """Display the full decision audit trail from portfolio stores."""
+    portfolios = stores.portfolios.list_portfolios()
+    if not portfolios:
+        console.print("[dim]No portfolios found. Run [bold]bvr ai auto[/bold] to create one.[/dim]")
+        raise typer.Exit(0)
+
+    # Resolve portfolio filter
+    target_ids: list[str] = []
+    if portfolio_name:
+        matches = [p for p in portfolios if p.name.lower() == portfolio_name.lower()]
+        if not matches:
+            console.print(f"[red]Portfolio '{portfolio_name}' not found.[/red]")
+            raise typer.Exit(1)
+        target_ids = [m.id for m in matches]
+    else:
+        target_ids = [p.id for p in portfolios]
+
+    # Portfolio summary table
+    summary_table = Table(title="📊 Portfolio Summary")
+    summary_table.add_column("Name", style="cyan")
+    summary_table.add_column("Mode")
+    summary_table.add_column("Aggressiveness")
+    summary_table.add_column("Capital", justify="right")
+    summary_table.add_column("P&L", justify="right")
+    summary_table.add_column("Trades", justify="right")
+    summary_table.add_column("Status")
+
+    for p in portfolios:
+        if p.id not in target_ids:
+            continue
+        pnl_style = "green" if p.realized_pnl >= 0 else "red"
+        summary_table.add_row(
+            p.name,
+            p.mode.value,
+            p.aggressiveness.value,
+            f"${p.initial_capital:,.2f}",
+            f"[{pnl_style}]${p.realized_pnl:,.2f}[/{pnl_style}]",
+            str(p.total_trades),
+            f"[{'green' if p.status.value == 'active' else 'dim'}]{p.status.value}[/]",
+        )
+
+    console.print(summary_table)
+    console.print()
+
+    # Decision audit trail
+    _DECISION_STYLES: dict[str, str] = {
+        "thesis_created": "blue",
+        "dd_approved": "green",
+        "dd_conditional": "yellow",
+        "dd_rejected": "red",
+        "trade_entered": "bold green",
+        "position_exit_target": "green",
+        "position_exit_stop": "red",
+        "position_exit_time": "yellow",
+        "position_exit_invalidated": "red",
+        "position_exit_manual": "blue",
+        "phase_transition": "dim",
+        "circuit_breaker_triggered": "bold red",
+        "circuit_breaker_reset": "dim green",
+        "earnings_scan": "magenta",
+        "morning_scan": "cyan",
+        "news_alert": "yellow",
+        "skip_trade": "dim",
+        "watchlist_add": "cyan",
+        "watchlist_remove": "dim",
+        "snapshot_captured": "dim",
+    }
+
+    for pid in target_ids:
+        decisions = stores.decisions.get_decisions(pid, limit=limit)
+        if not decisions:
+            continue
+
+        p_name = next((p.name for p in portfolios if p.id == pid), pid)
+        dtable = Table(title=f"🔍 Audit Trail — {p_name}")
+        dtable.add_column("Time", style="dim", width=19)
+        dtable.add_column("Type", width=24)
+        dtable.add_column("Symbol", style="cyan", width=6)
+        dtable.add_column("Action")
+        dtable.add_column("Amount", justify="right")
+        dtable.add_column("Conf", justify="right", width=5)
+
+        for d in decisions:
+            style = _DECISION_STYLES.get(d.decision_type.value, "white")
+            amt_str = f"${d.amount:,.2f}" if d.amount else ""
+            conf_str = f"{d.confidence:.0%}" if d.confidence else ""
+            dtable.add_row(
+                d.timestamp.strftime("%Y-%m-%d %H:%M"),
+                f"[{style}]{d.decision_type.value}[/{style}]",
+                d.symbol or "",
+                d.action[:40],
+                amt_str,
+                conf_str,
+            )
+
+        console.print(dtable)
+        console.print()
+
+
+# =============================================================================
+# RESET COMMAND
+# =============================================================================
+
+
+@ai_app.command("reset")
+def reset(
+    confirm: bool = typer.Option(False, "--confirm", "-y", help="Skip confirmation prompt"),
+    keep_events: bool = typer.Option(False, "--keep-events", help="Preserve market events data"),
+    portfolio: Optional[str] = typer.Option(None, "--portfolio", "-p", help="Reset specific portfolio by name"),
+) -> None:
+    """Clear trading data and start fresh.
+
+    Without flags, presents an interactive menu to choose which
+    portfolio to delete (or all). With ``--portfolio NAME``, deletes
+    only that portfolio's data (decisions, snapshots, state file).
+    """
+    from beavr.db.factory import create_sqlite_stores
+    from beavr.orchestrator.portfolio_config import build_portfolio_state_path
+
+    stores = create_sqlite_stores()
+    portfolios = stores.portfolios.list_portfolios()
+
+    # ── Resolve target ────────────────────────────────────────────
+    delete_all = False
+    target_ids: list[str] = []
+    target_names: list[str] = []
+
+    if portfolio:
+        matches = [p for p in portfolios if p.name.lower() == portfolio.lower()]
+        if not matches:
+            console.print(f"[red]Portfolio '{portfolio}' not found.[/red]")
+            raise typer.Exit(1)
+        target_ids = [m.id for m in matches]
+        target_names = [m.name for m in matches]
+    elif not confirm:
+        # Interactive selection
+        console.print()
+        console.print(Panel("[bold red]⚠️  Beavr AI — Data Reset[/bold red]"))
+        console.print()
+
+        if portfolios:
+            console.print("[bold]Portfolios found:[/bold]")
+            for idx, p in enumerate(portfolios, 1):
+                pnl_str = f"${p.realized_pnl:,.2f}" if p.realized_pnl else "$0.00"
+                console.print(f"  [{idx}] {p.name} ({p.total_trades} trades, {pnl_str})")
+            console.print("  [A] Delete ALL data")
+            console.print()
+
+            choice = typer.prompt("Select", default="A")
+            if choice.upper() == "A":
+                delete_all = True
+            else:
+                try:
+                    sel = int(choice) - 1
+                    if 0 <= sel < len(portfolios):
+                        target_ids = [portfolios[sel].id]
+                        target_names = [portfolios[sel].name]
+                    else:
+                        console.print("[red]Invalid selection.[/red]")
+                        raise typer.Exit(1)
+                except ValueError:
+                    console.print("[red]Invalid selection.[/red]")
+                    raise typer.Exit(1) from None
+        else:
+            delete_all = True
+    else:
+        delete_all = True
+
+    # ── Confirmation ──────────────────────────────────────────────
+    if delete_all:
+        desc = "ALL trading data"
+    else:
+        desc = f"portfolio(s): {', '.join(target_names)}"
+
+    if not confirm:
+        console.print()
+        console.print(f"[bold red]This will permanently delete {desc}.[/bold red]")
+        confirmation = typer.prompt("Type 'DELETE' to confirm", default="")
+        if confirmation != "DELETE":
+            console.print("[dim]Aborted.[/dim]")
+            raise typer.Exit(0)
+
+    # ── Execute deletion ──────────────────────────────────────────
+    if delete_all:
+        # Delete all portfolio data
+        stores.portfolios.delete_all_data()
+
+        # Delete state files
+        state_dir = Path("logs/ai_investor")
+        if state_dir.exists():
+            for f in state_dir.glob("state_*.json"):
+                f.unlink(missing_ok=True)
+
+        # Delete DD reports
+        dd_dir = Path("logs/dd_reports")
+        if dd_dir.exists():
+            import shutil
+
+            shutil.rmtree(dd_dir, ignore_errors=True)
+
+        if not keep_events and stores.events:
+            try:
+                stores.events.delete_all_events()
+            except (AttributeError, Exception):
+                pass  # Events store may not have delete_all_events
+
+        console.print("[green]✓ All data deleted. Starting fresh.[/green]")
+    else:
+        for pid in target_ids:
+            stores.portfolios.delete_portfolio(pid)
+            # Per-portfolio state file
+            state_file = Path(build_portfolio_state_path(pid))
+            state_file.unlink(missing_ok=True)
+
+        console.print(f"[green]✓ Deleted portfolio(s): {', '.join(target_names)}[/green]")
 
 
 # =============================================================================

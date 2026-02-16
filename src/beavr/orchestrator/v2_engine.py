@@ -327,6 +327,10 @@ class V2AutonomousOrchestrator:
         
         # Context builder (set externally)
         self._ctx_builder = None
+        
+        # Protocol-based data utilities (set externally or via set_providers)
+        self._screener: Optional[ScreenerProvider] = None
+        self._news_provider: Optional[NewsProvider] = None
 
     # ------------------------------------------------------------------
     # Decision logging
@@ -371,10 +375,94 @@ class V2AutonomousOrchestrator:
         except Exception as e:
             logger.warning(f"Failed to log decision: {e}")
 
-        # Protocol-based data utilities (set externally or via set_providers)
-        self._screener: Optional[ScreenerProvider] = None
-        self._news_provider: Optional[NewsProvider] = None
-    
+    # ------------------------------------------------------------------
+    # Daily snapshot capture
+    # ------------------------------------------------------------------
+
+    def _capture_daily_snapshot(self) -> None:
+        """Capture a point-in-time portfolio snapshot.
+
+        Called once per day during the transition to AFTER_HOURS.
+        No-op if snapshot_store or portfolio_id are not configured.
+        """
+        if not self.snapshot_store or not self.portfolio_id:
+            return
+        try:
+            from beavr.models.portfolio_record import PortfolioSnapshot
+
+            # Compute position market values from broker
+            positions = self._broker.get_positions() if self._broker else []
+            positions_value = Decimal("0")
+            for pos in positions:
+                qty = getattr(pos, "qty", None) or Decimal("0")
+                price = getattr(pos, "current_price", None) or getattr(pos, "market_value", None) or Decimal("0")
+                if qty and price:
+                    positions_value += Decimal(str(qty)) * Decimal(str(price))
+
+            cash = Decimal("0")
+            if self._broker:
+                try:
+                    account = self._broker.get_account()
+                    cash = Decimal(str(getattr(account, "cash", "0")))
+                except Exception:
+                    pass
+
+            portfolio_value = cash + positions_value
+
+            # Compute P&L from portfolio store
+            cumulative_pnl = Decimal("0")
+            cumulative_pnl_pct = 0.0
+            initial_capital = Decimal("0")
+            if self.portfolio_store:
+                try:
+                    record = self.portfolio_store.get_portfolio(self.portfolio_id)
+                    if record:
+                        cumulative_pnl = record.realized_pnl
+                        initial_capital = record.initial_capital
+                        if initial_capital > 0:
+                            cumulative_pnl_pct = float(cumulative_pnl / initial_capital * 100)
+                except Exception:
+                    pass
+
+            # Daily P&L: diff from previous snapshot
+            daily_pnl = Decimal("0")
+            daily_pnl_pct = 0.0
+            try:
+                prev_snapshots = self.snapshot_store.get_snapshots(self.portfolio_id)
+                if prev_snapshots:
+                    prev = prev_snapshots[-1]
+                    daily_pnl = portfolio_value - prev.portfolio_value
+                    if prev.portfolio_value > 0:
+                        daily_pnl_pct = float(daily_pnl / prev.portfolio_value * 100)
+                elif initial_capital > 0:
+                    daily_pnl = portfolio_value - initial_capital
+                    daily_pnl_pct = float(daily_pnl / initial_capital * 100)
+            except Exception:
+                pass
+
+            snapshot = PortfolioSnapshot(
+                portfolio_id=self.portfolio_id,
+                snapshot_date=date.today(),
+                portfolio_value=portfolio_value,
+                cash=cash,
+                positions_value=positions_value,
+                daily_pnl=daily_pnl,
+                daily_pnl_pct=daily_pnl_pct,
+                cumulative_pnl=cumulative_pnl,
+                cumulative_pnl_pct=cumulative_pnl_pct,
+                open_positions=len(positions),
+                trades_today=self.state.trades_today,
+            )
+            self.snapshot_store.take_snapshot(snapshot)
+            logger.info(
+                f"📸 Daily snapshot: value=${portfolio_value:.2f}, "
+                f"daily P&L=${daily_pnl:.2f}, positions={len(positions)}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to capture daily snapshot: {e}")
+
+    # Protocol-based data utilities (set externally or via set_providers)
+
     def set_trading_client(
         self,
         broker: BrokerProvider,
@@ -1673,6 +1761,9 @@ class V2AutonomousOrchestrator:
                         decision_type="phase_transition",
                         action=f"{self.state.current_phase.value} -> {current_phase.value}",
                     )
+                    # Capture daily snapshot when leaving MARKET_HOURS
+                    if self.state.current_phase == OrchestratorPhase.MARKET_HOURS:
+                        self._capture_daily_snapshot()
                     self.state.current_phase = current_phase
                     self._save_state()
                 
