@@ -286,6 +286,12 @@ class V2AutonomousOrchestrator:
         config: Optional[V2Config] = None,
         # LLM client (for lazy loading agents)
         llm_client: Optional[LLMClient] = None,
+        # Portfolio context (Phase 4)
+        portfolio_id: Optional[str] = None,
+        portfolio_directives: Optional[list[str]] = None,
+        decision_store: Optional[Any] = None,
+        snapshot_store: Optional[Any] = None,
+        portfolio_store: Optional[Any] = None,
     ) -> None:
         """Initialize the V2 Orchestrator."""
         self.news_monitor = news_monitor
@@ -303,6 +309,13 @@ class V2AutonomousOrchestrator:
         self.config = config or V2Config()
         self.llm_client = llm_client
         
+        # Portfolio context
+        self.portfolio_id = portfolio_id
+        self.portfolio_directives = portfolio_directives or []
+        self.decision_store = decision_store
+        self.snapshot_store = snapshot_store
+        self.portfolio_store = portfolio_store
+        
         # State
         self.state = SystemState()
         self._running = False
@@ -314,6 +327,49 @@ class V2AutonomousOrchestrator:
         
         # Context builder (set externally)
         self._ctx_builder = None
+
+    # ------------------------------------------------------------------
+    # Decision logging
+    # ------------------------------------------------------------------
+
+    def _log_decision(
+        self,
+        decision_type: str,
+        action: str,
+        symbol: Optional[str] = None,
+        thesis_id: Optional[str] = None,
+        dd_report_id: Optional[str] = None,
+        position_id: Optional[str] = None,
+        reasoning: Optional[str] = None,
+        confidence: Optional[float] = None,
+        amount: Optional[Decimal] = None,
+        shares: Optional[Decimal] = None,
+        price: Optional[Decimal] = None,
+    ) -> None:
+        """Log a decision to the audit trail (no-op if stores not wired)."""
+        if not self.decision_store or not self.portfolio_id:
+            return
+        try:
+            from beavr.models.portfolio_record import DecisionType, PortfolioDecision
+
+            decision = PortfolioDecision(
+                portfolio_id=self.portfolio_id,
+                phase=self.state.current_phase.value,
+                decision_type=DecisionType(decision_type),
+                symbol=symbol,
+                thesis_id=thesis_id,
+                dd_report_id=dd_report_id,
+                position_id=position_id,
+                action=action,
+                reasoning=reasoning,
+                confidence=confidence,
+                amount=amount,
+                shares=shares,
+                price=price,
+            )
+            self.decision_store.log_decision(decision)
+        except Exception as e:
+            logger.warning(f"Failed to log decision: {e}")
 
         # Protocol-based data utilities (set externally or via set_providers)
         self._screener: Optional[ScreenerProvider] = None
@@ -420,6 +476,11 @@ class V2AutonomousOrchestrator:
                 self.state.trading_enabled = True
                 self.state.circuit_breaker_until = None
                 self.state.consecutive_losses = 0
+                self._log_decision(
+                    decision_type="circuit_breaker_reset",
+                    action="resume_trading",
+                    reasoning="Cooldown period expired",
+                )
                 return True
             return False
         return True
@@ -430,6 +491,11 @@ class V2AutonomousOrchestrator:
         self.state.trading_enabled = False
         self.state.circuit_breaker_until = (
             datetime.now() + timedelta(hours=self.config.circuit_breaker_hours)
+        )
+        self._log_decision(
+            decision_type="circuit_breaker_triggered",
+            action="halt_trading",
+            reasoning=reason,
         )
         self._save_state()
     
@@ -817,6 +883,15 @@ class V2AutonomousOrchestrator:
                     logger.warning(f"Failed to save thesis for {thesis.symbol}: {e}")
             created.append(thesis)
 
+            self._log_decision(
+                decision_type="thesis_created",
+                action="create",
+                symbol=thesis.symbol,
+                thesis_id=thesis.id,
+                reasoning=thesis.entry_rationale,
+                confidence=thesis.confidence,
+            )
+
             if self.events_repo:
                 self.events_repo.mark_processed(event.id, thesis.id)
 
@@ -1063,16 +1138,41 @@ class V2AutonomousOrchestrator:
                         thesis.entry_price_target = dd_report.recommended_entry
                         thesis.profit_target = dd_report.recommended_target
                         thesis.stop_loss = dd_report.recommended_stop
+                        self._log_decision(
+                            decision_type="dd_approved",
+                            action="approve",
+                            symbol=symbol,
+                            thesis_id=thesis.id,
+                            dd_report_id=dd_report.id,
+                            confidence=dd_report.confidence,
+                            reasoning=f"DD approved: {dd_report.recommendation.value}",
+                        )
 
                     elif dd_report.recommendation == DDRecommendation.CONDITIONAL:
                         logger.info(f"   ⚠️  CONDITIONAL (confidence: {dd_report.confidence:.0%})")
                         thesis.dd_report_id = dd_report.id
+                        self._log_decision(
+                            decision_type="dd_conditional",
+                            action="conditional",
+                            symbol=symbol,
+                            thesis_id=thesis.id,
+                            dd_report_id=dd_report.id,
+                            confidence=dd_report.confidence,
+                        )
 
                     else:
                         reason = dd_report.rejection_rationale or "No reason provided"
                         logger.info(f"   ❌ REJECTED: {reason}")
                         thesis.status = ThesisStatus.INVALIDATED
                         thesis.dd_report_id = dd_report.id
+                        self._log_decision(
+                            decision_type="dd_rejected",
+                            action="reject",
+                            symbol=symbol,
+                            thesis_id=thesis.id,
+                            dd_report_id=dd_report.id,
+                            reasoning=reason,
+                        )
 
                     # Update thesis in DB
                     try:
@@ -1373,6 +1473,19 @@ class V2AutonomousOrchestrator:
             if self.thesis_repo:
                 self.thesis_repo.update(thesis)
             
+            self._log_decision(
+                decision_type="trade_entered",
+                action="buy",
+                symbol=thesis.symbol,
+                thesis_id=thesis.id,
+                dd_report_id=thesis.dd_report_id,
+                reasoning=thesis.entry_rationale[:200],
+                confidence=thesis.confidence,
+                amount=position_value,
+                shares=shares,
+                price=current_price,
+            )
+
             self._save_state()
             return True
             
@@ -1479,6 +1592,34 @@ class V2AutonomousOrchestrator:
             
             logger.info(f"✅ Closed {symbol} ({reason}): {pnl_pct:+.1f}%")
             
+            # Map reason to decision type
+            _reason_to_type = {
+                "target_hit": "position_exit_target",
+                "stop_loss": "position_exit_stop",
+                "day_trade_deadline": "position_exit_time",
+                "invalidated": "position_exit_invalidated",
+                "manual": "position_exit_manual",
+            }
+            exit_decision_type = _reason_to_type.get(reason, "position_exit_manual")
+
+            is_win = pnl_pct > 0
+            trade_pnl = Decimal(str(round(pnl_pct, 2)))
+            self._log_decision(
+                decision_type=exit_decision_type,
+                action="sell",
+                symbol=symbol,
+                reasoning=f"Exit: {reason} ({pnl_pct:+.1f}%)",
+                price=Decimal(str(exit_price)) if exit_price else None,
+            )
+            # Update portfolio stats
+            if self.portfolio_store and self.portfolio_id:
+                try:
+                    self.portfolio_store.update_portfolio_stats(
+                        self.portfolio_id, trade_pnl, is_win=is_win
+                    )
+                except Exception as stats_err:
+                    logger.warning(f"Failed to update portfolio stats: {stats_err}")
+            
             # Update state
             if symbol in self.state.active_day_trades:
                 self.state.active_day_trades.remove(symbol)
@@ -1528,6 +1669,10 @@ class V2AutonomousOrchestrator:
                 # Log phase changes
                 if current_phase != self.state.current_phase:
                     logger.info(f"\n📍 Phase change: {self.state.current_phase.value} → {current_phase.value}")
+                    self._log_decision(
+                        decision_type="phase_transition",
+                        action=f"{self.state.current_phase.value} -> {current_phase.value}",
+                    )
                     self.state.current_phase = current_phase
                     self._save_state()
                 

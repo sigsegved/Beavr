@@ -1467,6 +1467,12 @@ def auto(
     research_interval: int = typer.Option(15, "--research-interval", help="Research cycle interval (minutes)"),
     test: bool = typer.Option(False, "--test", help="Test mode (no real trades)"),
     once: bool = typer.Option(False, "--once", help="Run one cycle then exit"),
+    # Portfolio flags
+    portfolio: Optional[str] = typer.Option(None, "--portfolio", "-p", help="Portfolio name (resume or create)"),
+    mode: Optional[str] = typer.Option(None, "--mode", "-m", help="Trading mode: paper or live"),
+    aggressiveness: Optional[str] = typer.Option(None, "--aggressiveness", help="Risk profile: conservative, moderate, aggressive"),
+    directive: Optional[list[str]] = typer.Option(None, "--directive", help="AI trading directive (repeatable)"),
+    initial_capital: Optional[float] = typer.Option(None, "--initial-capital", help="Initial capital for new portfolio ($)"),
 ) -> None:
     """
     Run autonomous AI trading (thesis-driven).
@@ -1498,9 +1504,15 @@ def auto(
         ThesisGeneratorAgent,
         TradeExecutorAgent,
     )
+    from beavr.cli.portfolio_wizard import select_or_create_portfolio
     from beavr.db import DDReportsRepository, EventsRepository, ThesisRepository
+    from beavr.db.factory import create_sqlite_stores
     from beavr.llm import LLMClient, get_agent_config
     from beavr.orchestrator import V2AutonomousOrchestrator, V2Config
+    from beavr.orchestrator.portfolio_config import (
+        apply_aggressiveness,
+        build_portfolio_state_path,
+    )
 
     investor = get_investor()
 
@@ -1510,9 +1522,26 @@ def auto(
     log_file = log_dir / f"v2_auto_{datetime.now().strftime('%Y%m%d')}.log"
     _setup_auto_logging(log_file)
 
+    # ── Portfolio selection ──
+    stores = create_sqlite_stores()
+    capital_decimal = Decimal(str(initial_capital)) if initial_capital is not None else None
+    portfolio_record = select_or_create_portfolio(
+        portfolio_store=stores.portfolios,
+        portfolio_name=portfolio,
+        mode=mode,
+        aggressiveness=aggressiveness,
+        directives=directive,
+        capital=capital_decimal,
+        capital_pct=capital_pct if portfolio is not None else None,
+    )
+    portfolio_directives = portfolio_record.directives or []
+
     logger.info("=" * 60)
     logger.info("🤖 AUTONOMOUS AI TRADING")
     logger.info("=" * 60)
+    logger.info(f"Portfolio: {portfolio_record.name} (id={portfolio_record.id})")
+    logger.info(f"Mode: {portfolio_record.mode.value}")
+    logger.info(f"Aggressiveness: {portfolio_record.aggressiveness.value}")
     logger.info(f"Target Return: {target_return}%")
     logger.info(f"Max Drawdown: {max_drawdown}%")
     logger.info(f"Day Trade: +{day_trade_target}% / -{day_trade_stop}%")
@@ -1525,18 +1554,21 @@ def auto(
 
     console.print(Panel.fit(
         f"[bold]🤖 Autonomous AI Trading[/bold]\n\n"
+        f"Portfolio: {portfolio_record.name}\n"
+        f"Trading Mode: {portfolio_record.mode.value}\n"
+        f"Aggressiveness: {portfolio_record.aggressiveness.value}\n"
         f"Target Return: {target_return}%\n"
         f"Max Drawdown: {max_drawdown}%\n"
         f"Day Trade: +{day_trade_target}% / -{day_trade_stop}% (R/R {day_trade_target/day_trade_stop:.1f}:1)\n"
         f"Daily Limit: {daily_limit} trades\n"
-        f"Capital: {capital_pct}%\n\n"
+        f"Capital: ${portfolio_record.initial_capital:,.2f}\n\n"
         f"Research Interval: {research_interval} min\n"
         f"Mode: {'[yellow]TEST[/yellow]' if test else '[green]LIVE[/green]'}\n"
         f"Log: {log_file}",
         title="Autonomous Trading",
     ))
 
-    # Build configuration
+    # Build configuration (base, then apply aggressiveness overrides)
     config = V2Config(
         max_daily_loss_pct=3.0,  # 3% daily max loss
         max_drawdown_pct=max_drawdown,
@@ -1546,9 +1578,11 @@ def auto(
         day_trade_stop_pct=day_trade_stop,
         news_poll_interval=research_interval * 60,
         market_research_interval=research_interval * 60,
-        state_file=str(log_dir / "v2_state.json"),
+        state_file=build_portfolio_state_path(portfolio_record.id, str(log_dir)),
         log_dir=str(log_dir),
     )
+    # Apply aggressiveness overrides on top of base config
+    config = apply_aggressiveness(config, portfolio_record.aggressiveness.value)
 
     # Initialize agents
     console.print("\n[dim]Initializing agents...[/dim]")
@@ -1599,16 +1633,27 @@ def auto(
         events_repo=events_repo,
         positions_repo=investor.positions_repo,
         config=config,
+        # Portfolio context
+        portfolio_id=portfolio_record.id,
+        portfolio_directives=portfolio_directives,
+        decision_store=stores.decisions,
+        snapshot_store=stores.snapshots,
+        portfolio_store=stores.portfolios,
     )
 
     # Set trading clients (unless test mode)
     if not test:
         orchestrator.set_trading_client(investor.broker, investor.data_provider)
     
-    # Set context builder
-    orchestrator.set_context_builder(
-        lambda symbols: _build_agent_context_for_symbols(investor, symbols)
-    )
+    # Set context builder (injects portfolio directives into every context)
+    _directives = portfolio_directives  # close over for lambda
+
+    def _build_ctx_with_directives(symbols: list[str]) -> AgentContext:
+        ctx = _build_agent_context_for_symbols(investor, symbols)
+        ctx.directives = _directives
+        return ctx
+
+    orchestrator.set_context_builder(_build_ctx_with_directives)
 
     console.print("[green]✓[/green] Orchestrator ready")
 

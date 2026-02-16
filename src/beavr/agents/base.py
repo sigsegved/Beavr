@@ -46,6 +46,9 @@ class AgentContext(BaseModel):
     # Events/News (future extension)
     events: list[dict[str, Any]] = Field(default_factory=list)
 
+    # Portfolio directives (user-provided trading personality)
+    directives: list[str] = Field(default_factory=list)
+
     model_config = {"arbitrary_types_allowed": True}
 
 

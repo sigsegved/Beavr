@@ -302,10 +302,17 @@ Based on this event and data, determine if a tradeable thesis exists.
 
 If you cannot articulate a specific price target and exit date,
 respond with NO_THESIS.
-
+{self._format_directives(ctx)}
 Respond with your analysis in JSON format.
 """
     
+    @staticmethod
+    def _format_directives(ctx: AgentContext) -> str:
+        """Format portfolio directives for prompt injection."""
+        from beavr.orchestrator.portfolio_config import format_directives_for_prompt
+
+        return format_directives_for_prompt(ctx.directives)
+
     def _create_thesis(
         self,
         output: ThesisOutput,

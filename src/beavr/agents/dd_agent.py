@@ -533,8 +533,16 @@ Market Regime: {ctx.regime or 'Unknown'}
 Analyze this thesis thoroughly and provide your recommendation.
 Remember: You are the last line of defense. If in doubt, REJECT.
 Focus on capital preservation over opportunity capture.
+{self._format_directives(ctx)}
 """
     
+    @staticmethod
+    def _format_directives(ctx: AgentContext) -> str:
+        """Format portfolio directives for prompt injection."""
+        from beavr.orchestrator.portfolio_config import format_directives_for_prompt
+
+        return format_directives_for_prompt(ctx.directives)
+
     def _apply_validation_rules(
         self,
         recommendation: DDRecommendation,
