@@ -56,6 +56,16 @@ class BrokerFactory:
             return AlpacaBroker(api_key=api_key, api_secret=api_secret, paper=paper)
 
         elif broker_config.provider == "webull":
+            if broker_config.paper:
+                raise BrokerError(
+                    error_code="paper_not_supported",
+                    message=(
+                        "Webull does not support paper trading. "
+                        "Use provider='alpaca' with paper=true, "
+                        "or set paper=false for live Webull trading."
+                    ),
+                    broker_name="webull",
+                )
             webull_cfg = broker_config.webull
             if not webull_cfg:
                 raise BrokerError(
@@ -79,7 +89,6 @@ class BrokerFactory:
                 app_secret=app_secret,
                 account_id=account_id,
                 region=webull_cfg.region,
-                paper=broker_config.paper,
             )
         else:
             raise BrokerError(

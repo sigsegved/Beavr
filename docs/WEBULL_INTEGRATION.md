@@ -38,7 +38,7 @@ The Webull Python SDK (published on PyPI as `webull-python-sdk-*` packages) prov
 
 | Decision | Resolution |
 |----------|------------|
-| **Paper trading** | Webull provides a UAT/sandbox environment at `us-openapi-alb.uat.webullbroker.com`. Same APIs for paper and live — identical to Alpaca's model. Adapter uses `api_client.add_endpoint()` to switch. |
+| **Paper trading** | Webull's OpenAPI does **not** support paper/sandbox trading. Paper trading is only available through Alpaca. When `paper=true`, the factory enforces `provider="alpaca"`. Webull is live-only. |
 | **SDK packaging** | Standard pip dependency (`webull-python-sdk-core`, `webull-python-sdk-trade`, `webull-python-sdk-mdata` etc.) in `pyproject.toml`, same as `alpaca-py`. The vendored `openapi-python-sdk/` folder is for reference only. |
 | **Screener/News** | Mixed-provider mode: data/news/screening can come from Alpaca while trading uses Webull. Trading is single-broker only. |
 | **Market clock** | Always sourced from the brokerage API. Alpaca: `get_clock()`. Webull: `get_trade_calendar()` + system time. |
@@ -71,7 +71,7 @@ Order submission logic is duplicated in three places: `PaperTradingRunner`, `AII
 
 ### 2.3 Why Webull
 
-- Webull supports both **paper and live trading** (via separate environments)
+- Webull supports **live trading** (paper trading is Alpaca-only)
 - Rich order types: Market, Limit, Stop, Stop-Limit, Trailing Stop, Market-on-Open, Market-on-Close
 - Combo orders: OTO, OCO, OTOCO (stop-loss + take-profit in one request)
 - Multi-market support: US, HK, JP
@@ -91,7 +91,7 @@ Order submission logic is duplicated in three places: `PaperTradingRunner`, `AII
 4. **User-selectable broker** — single config field (`broker = "alpaca"` or `broker = "webull"`) switches the entire platform
 5. **Consolidate order execution** — one code path for submitting orders, used by all callers
 6. **Maintain backward compatibility** — existing Alpaca users experience no breaking changes
-7. **Paper trading parity** — both Alpaca and Webull paper trading must work
+7. **Paper trading** — available via Alpaca only; Webull rejects `paper=true` with a clear error
 
 ### Non-Goals (for this iteration)
 
@@ -220,7 +220,7 @@ These components have **no direct Alpaca dependency** and will work as-is:
 │                              │
 │  [broker]                    │
 │  provider = "webull"         │
-│  paper = true                │
+│  paper = false               │
 │                              │
 │  [broker.webull]             │
 │  app_key_env = "WEBULL_..."  │
@@ -423,8 +423,8 @@ The factory accepts separate config for `data_provider` and `news_provider` in a
 
 ```toml
 [broker]
-provider = "webull"       # Trading via Webull
-paper = true
+provider = "webull"       # Trading via Webull (live only)
+paper = false             # Paper trading not supported for Webull
 
 [data]
 provider = "webull"       # Market data from Webull (default: same as broker)
@@ -532,24 +532,21 @@ The adapter normalizes Webull's response to match the same DataFrame format `Alp
 - Columns: `open`, `high`, `low`, `close`, `volume` (all `Decimal`)
 - Sorted ascending by timestamp
 
-### 8.4 Paper Trading with Webull
+### 8.4 Paper Trading
 
-Webull provides a dedicated **UAT/sandbox environment** for paper trading, confirmed via their official developer documentation:
+Webull's OpenAPI does **not** support paper/sandbox trading. There is no UAT endpoint available for simulated order execution.
 
-- **Production endpoint:** `api.webull.com`
-- **Test/UAT endpoint:** `us-openapi-alb.uat.webullbroker.com`
+**For paper trading, use Alpaca:**
 
-This is functionally identical to Alpaca's `paper=True` model — same APIs, separate environment. The Webull adapter implements this via the SDK's `add_endpoint()` method:
-
-```
-When paper=True:
-    api_client.add_endpoint("us", "us-openapi-alb.uat.webullbroker.com")
-
-When paper=False:
-    Uses default endpoint (api.webull.com) from endpoints.json
+```toml
+[broker]
+provider = "alpaca"
+paper = true
 ```
 
-Users provide the same `app_key`/`app_secret` credentials for both environments (Webull's developer portal issues separate sandbox keys). The `paper: bool` config flag controls which endpoint is used — no code changes needed between paper and live.
+The `BrokerFactory` enforces this constraint: if `provider="webull"` and `paper=true`, it raises a `BrokerError` with `error_code="paper_not_supported"` and a message directing the user to switch to Alpaca for paper trading.
+
+This means Webull is a **live-only** broker in Beavr. Users should validate their strategies using Alpaca paper trading before switching to Webull for live execution.
 
 ---
 
@@ -561,7 +558,7 @@ Users provide the same `app_key`/`app_secret` credentials for both environments 
 class BrokerConfig(BaseModel):
     """Base broker configuration."""
     provider: Literal["alpaca", "webull"] = "alpaca"
-    paper: bool = True
+    paper: bool = True  # Only applicable to Alpaca; Webull is live-only
 
 class AlpacaConfig(BrokerConfig):
     """Alpaca-specific broker configuration."""
@@ -614,7 +611,7 @@ api_secret_env = "ALPACA_API_SECRET"
 ```toml
 [broker]
 provider = "webull"
-paper = true
+paper = false  # Webull does not support paper trading
 
 [broker.webull]
 app_key_env = "WEBULL_APP_KEY"

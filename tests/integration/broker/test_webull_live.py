@@ -3,6 +3,9 @@
 These tests hit the real Webull API and require credentials.
 They are skipped unless WEBULL_APP_KEY and WEBULL_APP_SECRET are set.
 
+NOTE: Webull does NOT support paper trading. These tests hit the LIVE API.
+Only run them with caution and with a funded account.
+
 Run with:
     pytest tests/integration/broker/test_webull_live.py -v --timeout=30
 """
@@ -26,7 +29,7 @@ pytestmark = [
 
 @pytest.fixture(scope="module")
 def webull_broker() -> object:
-    """Create a live WebullBroker (paper mode)."""
+    """Create a live WebullBroker (live only — no paper trading support)."""
     from beavr.broker.webull.broker import WebullBroker
 
     return WebullBroker(
@@ -34,7 +37,6 @@ def webull_broker() -> object:
         app_secret=os.environ["WEBULL_APP_SECRET"],
         account_id=os.getenv("WEBULL_ACCOUNT_ID"),
         region=os.getenv("WEBULL_REGION", "us"),
-        paper=True,
     )
 
 

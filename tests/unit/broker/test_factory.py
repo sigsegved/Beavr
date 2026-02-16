@@ -73,9 +73,17 @@ class TestCreateBrokerDefault:
 class TestCreateBrokerWebull:
     """Tests for BrokerFactory.create_broker with Webull provider."""
 
+    def test_webull_paper_trading_raises(self) -> None:
+        """When provider is 'webull' and paper=True, should raise BrokerError."""
+        webull_cfg = WebullConfig()
+        broker_cfg = BrokerProviderConfig(provider="webull", paper=True, webull=webull_cfg)
+        config = AppConfig(broker=broker_cfg)
+        with pytest.raises(BrokerError, match="paper_not_supported"):
+            BrokerFactory.create_broker(config)
+
     def test_webull_no_webull_config_raises(self) -> None:
         """When provider is 'webull' but no webull config, should raise."""
-        broker_cfg = BrokerProviderConfig(provider="webull")
+        broker_cfg = BrokerProviderConfig(provider="webull", paper=False)
         config = AppConfig(broker=broker_cfg)
         with pytest.raises(BrokerError, match="missing_config"):
             BrokerFactory.create_broker(config)
@@ -85,16 +93,16 @@ class TestCreateBrokerWebull:
         os.environ.pop("WEBULL_APP_KEY", None)
         os.environ.pop("WEBULL_APP_SECRET", None)
         webull_cfg = WebullConfig()
-        broker_cfg = BrokerProviderConfig(provider="webull", webull=webull_cfg)
+        broker_cfg = BrokerProviderConfig(provider="webull", paper=False, webull=webull_cfg)
         config = AppConfig(broker=broker_cfg)
         with pytest.raises(BrokerError, match="missing_credentials"):
             BrokerFactory.create_broker(config)
 
     @pytest.mark.usefixtures("_webull_env")
     def test_webull_with_credentials_creates_broker(self) -> None:
-        """When Webull credentials are set, should create WebullBroker."""
+        """When Webull credentials are set and paper=False, should create WebullBroker."""
         webull_cfg = WebullConfig()
-        broker_cfg = BrokerProviderConfig(provider="webull", webull=webull_cfg)
+        broker_cfg = BrokerProviderConfig(provider="webull", paper=False, webull=webull_cfg)
         config = AppConfig(broker=broker_cfg)
         mock_broker = MagicMock()
         with patch(

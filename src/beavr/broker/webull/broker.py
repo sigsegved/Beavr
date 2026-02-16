@@ -42,19 +42,11 @@ class WebullBroker:
         app_secret: str,
         account_id: Optional[str] = None,
         region: str = "us",
-        paper: bool = True,
     ) -> None:
         from webullsdkcore.client import ApiClient
 
         self._api_client = ApiClient(app_key, app_secret, region_id=region)
         self._region = region
-        self._paper = paper
-
-        # Paper trading endpoint
-        if paper:
-            self._api_client.add_endpoint(
-                region, "us-openapi-alb.uat.webullbroker.com"
-            )
 
         # Account ID (auto-discover if not provided)
         self._account_id = account_id or self._discover_account_id()

@@ -158,7 +158,6 @@ def webull_broker() -> Generator[
                 app_key="test_key",
                 app_secret="test_secret",
                 account_id="12345",
-                paper=True,
             )
 
         # Set up lazy-initialised SDK mocks
@@ -201,32 +200,26 @@ class TestWebullBrokerInit:
     """Tests for broker initialization."""
 
     # 3
-    def test_init_paper_sets_endpoint(
+    def test_init_does_not_set_paper_endpoint(
         self, webull_broker: tuple[WebullBroker, Any, Any, Any, Any, Any]
     ) -> None:
-        """Paper mode should configure the UAT endpoint."""
+        """WebullBroker should never set a paper/UAT endpoint."""
         broker, mock_api_client, *_ = webull_broker
-        assert broker._paper is True
-        mock_api_client.add_endpoint.assert_called_once_with(
-            "us", "us-openapi-alb.uat.webullbroker.com"
-        )
+        mock_api_client.add_endpoint.assert_not_called()
 
     # 4
-    def test_init_live_does_not_set_paper_endpoint(self) -> None:
-        """Live mode should NOT add the paper endpoint."""
+    def test_init_no_paper_attribute(self) -> None:
+        """WebullBroker should not have a _paper attribute."""
         with patch(
             "beavr.broker.webull.broker.InstrumentCache"
         ):
             _mock_webullsdkcore.client.ApiClient = MagicMock()
-            mock_client = _mock_webullsdkcore.client.ApiClient.return_value
             broker = WebullBroker(
                 app_key="k",
                 app_secret="s",
                 account_id="999",
-                paper=False,
             )
-            mock_client.add_endpoint.assert_not_called()
-            assert broker._paper is False
+            assert not hasattr(broker, "_paper")
 
     # 5
     def test_account_id_auto_discovery_success(self) -> None:
@@ -252,7 +245,6 @@ class TestWebullBrokerInit:
                 app_key="k",
                 app_secret="s",
                 account_id=None,
-                paper=True,
             )
             assert broker._account_id == "auto-id-123"
 
@@ -279,7 +271,6 @@ class TestWebullBrokerInit:
                     app_key="k",
                     app_secret="s",
                     account_id=None,
-                    paper=True,
                 )
 
 

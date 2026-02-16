@@ -66,13 +66,13 @@ class BrokerProviderConfig(BaseModel):
 
     Attributes:
         provider: Broker provider name (alpaca or webull)
-        paper: Whether to use paper/sandbox trading
+        paper: Whether to use paper trading (Alpaca only; Webull is live-only)
         alpaca: Alpaca-specific configuration
         webull: Webull-specific configuration
     """
 
     provider: Literal["alpaca", "webull"] = Field(default="alpaca", description="Broker provider name")
-    paper: bool = Field(default=True, description="Use paper/sandbox trading")
+    paper: bool = Field(default=True, description="Use paper trading (Alpaca only)")
     alpaca: Optional[AlpacaConfig] = Field(default=None, description="Alpaca-specific config")
     webull: Optional[WebullConfig] = Field(default=None, description="Webull-specific config")
 

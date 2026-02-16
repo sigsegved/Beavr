@@ -48,10 +48,13 @@ paper = true  # Use paper trading
 
 ### Webull
 
+> **Note:** Webull does not support paper trading. Use Alpaca for paper
+> trading, then switch to Webull for live execution.
+
 ```toml
 [broker]
 provider = "webull"
-paper = true
+paper = false  # Must be false — Webull is live-only
 
 [broker.webull]
 region = "us"  # "us" or "hk"
@@ -162,6 +165,7 @@ bvr backtest export <run-id> results.csv
 
 ### Webull
 
+- **Live trading only** — paper/sandbox trading is not supported
 - Requires OpenAPI SDK credentials (app key + app secret)
 - Automatic account discovery if account ID is not provided
 - Instrument IDs are cached locally in SQLite for performance
