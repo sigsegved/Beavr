@@ -1977,7 +1977,22 @@ def auto(
 
     # Set trading clients (unless test mode)
     if not test:
-        orchestrator.set_trading_client(investor.broker, investor.data_provider)
+        screener = BrokerFactory.create_screener(get_settings())
+        news_provider = BrokerFactory.create_news_provider(get_settings())
+        orchestrator.set_trading_client(
+            investor.broker,
+            investor.data_provider,
+            screener=screener,
+            news_provider=news_provider,
+        )
+        if news_provider:
+            console.print("[green]✓[/green] News provider connected (Alpaca)")
+        else:
+            console.print("[yellow]⚠[/yellow] News provider unavailable")
+        if screener:
+            console.print("[green]✓[/green] Market screener connected (Alpaca)")
+        else:
+            console.print("[yellow]⚠[/yellow] Market screener unavailable")
     
     # Set context builder (injects portfolio directives into every context)
     _directives = portfolio_directives  # close over for lambda

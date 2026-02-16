@@ -1955,24 +1955,47 @@ class V2AutonomousOrchestrator:
                     time.sleep(self.config.position_check_interval)
                     
                 else:  # AFTER_HOURS
-                    # Heartbeat log
-                    logger.info("🌆 After Hours | Preparing for overnight research...")
                     # Reset for next day
                     candidates_today = []
-                    
-                    # Check if we should scan for news
-                    time_since_news = (datetime.now(ET) - last_news_check).total_seconds()
-                    if time_since_news >= self.config.news_alert_interval:
-                        logger.info("📰 Scanning for breaking news...")
-                        self._scan_breaking_news()
-                        last_news_check = datetime.now(ET)
-                    
-                    # Sleep until next news scan
-                    remaining = int(self.config.news_alert_interval - (datetime.now(ET) - last_news_check).total_seconds())
-                    sleep_time = max(60, min(remaining, self.config.overnight_sleep_interval))
-                    logger.info(f"💤 Sleeping {sleep_time // 60}m until next news scan...")
-                    logger.info(f"💤 Sleeping {sleep_time // 60}m until next news scan...")
-                    time.sleep(sleep_time)
+
+                    # Check for pending DD work (theses from market hours)
+                    pending = self._get_pending_dd_candidates()
+                    if pending:
+                        logger.info(
+                            f"🌆 After Hours | {len(pending)} pending DD candidates — running research..."
+                        )
+                        self._run_dd_cycle(pending, "🌆 AFTER-HOURS DD CYCLE")
+                        # Short sleep then re-check
+                        time.sleep(self.config.position_check_interval)
+                    else:
+                        # No DD work — scan for breaking news
+                        time_since_news = (datetime.now(ET) - last_news_check).total_seconds()
+                        if time_since_news >= self.config.news_alert_interval:
+                            logger.info("🌆 After Hours | Scanning for breaking news...")
+                            self._scan_breaking_news()
+                            last_news_check = datetime.now(ET)
+
+                            # Check if news created new theses
+                            new_pending = self._get_pending_dd_candidates()
+                            if new_pending:
+                                logger.info(
+                                    f"  📝 News created {len(new_pending)} new thesis candidates"
+                                )
+                                time.sleep(60)
+                            else:
+                                logger.info(
+                                    f"💤 No work. Sleeping {self.config.news_alert_interval // 60}m until next news scan..."
+                                )
+                                time.sleep(self.config.news_alert_interval)
+                        else:
+                            remaining = max(
+                                60,
+                                int(self.config.news_alert_interval - time_since_news),
+                            )
+                            logger.info(
+                                f"🌆 After Hours | Sleeping {remaining // 60}m until next news scan..."
+                            )
+                            time.sleep(remaining)
                 
             except KeyboardInterrupt:
                 logger.info("⛔ Shutdown requested")
