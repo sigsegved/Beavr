@@ -8,7 +8,7 @@ Commands:
     bvr ai sell       - Sell positions (specific or all)
     bvr ai analyze    - Analyze market without trading
     bvr ai history    - Show trade history and performance
-    bvr ai auto       - Run autonomous trading (pre-market analysis + auto-trade)
+    bvr ai auto       - Run autonomous thesis-driven trading
 
 Stop/Target Tracking:
     - AI positions are tracked in the SQLite database with entry price,
@@ -22,7 +22,6 @@ Stop/Target Tracking:
 
 from __future__ import annotations
 
-import json
 import logging
 import time
 from datetime import date, datetime, timedelta
@@ -972,327 +971,6 @@ def _setup_auto_logging(log_file: Path) -> None:
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
-def _get_market_status(investor: AIInvestor) -> dict:
-    """Get current market status."""
-    clock = investor.broker.get_clock()
-    now_et = datetime.now(ET)
-
-    return {
-        "is_open": clock.is_open,
-        "next_open": clock.next_open,
-        "next_close": clock.next_close,
-        "now_et": now_et,
-    }
-
-
-def _wait_until(target_time: datetime, check_interval: int = 60) -> None:
-    """Wait until target time, checking periodically."""
-    while datetime.now(ET) < target_time:
-        remaining = (target_time - datetime.now(ET)).total_seconds()
-        if remaining > 0:
-            sleep_time = min(remaining, check_interval)
-            time.sleep(sleep_time)
-
-
-def _log_state(log_dir: Path, investor: AIInvestor, daily_trades: list) -> None:
-    """Log current state to JSON file."""
-    try:
-        account = investor.get_account()
-        state = {
-            "timestamp": datetime.now().isoformat(),
-            "portfolio_value": str(account["equity"]),
-            "cash": str(account["cash"]),
-            "positions": {k: str(v["qty"]) for k, v in account["positions"].items()},
-            "daily_trades": daily_trades,
-        }
-
-        state_file = log_dir / "auto_state.json"
-        with open(state_file, "w") as f:
-            json.dump(state, f, indent=2)
-    except Exception as e:
-        logger.warning(f"Could not log state: {e}")
-
-
-@ai_app.command()
-def auto(
-    amount: float = typer.Option(1000.0, "--amount", "-a", help="Amount to invest each day"),
-    target: float = typer.Option(5.0, "--target", "-t", help="Default profit target %"),
-    stop: float = typer.Option(5.0, "--stop", "-s", help="Default stop loss %"),
-    check_interval: int = typer.Option(5, "--interval", "-i", help="Position check interval (minutes)"),
-    pre_market_hours: float = typer.Option(1.0, "--pre-market", "-p", help="Hours before market open to analyze"),
-    test: bool = typer.Option(False, "--test", help="Test mode (no real trades)"),
-    once: bool = typer.Option(False, "--once", help="Run one cycle then exit"),
-) -> None:
-    """Run autonomous AI trading.
-    
-    This command runs continuously and:
-    1. Analyzes market opportunities during pre-market (default: 1 hour before open)
-    2. Executes trades at market open
-    3. Monitors positions throughout the day and auto-exits at targets/stops
-    4. Sleeps overnight and repeats the next trading day
-    
-    Logs are written to logs/ai_investor/auto_YYYYMMDD.log
-    State is saved to logs/ai_investor/auto_state.json
-    
-    Example:
-        bvr ai auto --amount 2000 --target 5 --stop 3 &
-    """
-    investor = get_investor()
-
-    # Set up logging
-    log_dir = Path("logs/ai_investor")
-    log_file = log_dir / f"auto_{datetime.now().strftime('%Y%m%d')}.log"
-    _setup_auto_logging(log_file)
-
-    logger.info("=" * 60)
-    logger.info("🤖 AUTONOMOUS AI TRADING STARTED")
-    logger.info("=" * 60)
-    logger.info(f"Amount per day: ${amount:.2f}")
-    logger.info(f"Target: +{target}% | Stop: -{stop}%")
-    logger.info(f"Pre-market analysis: {pre_market_hours}h before open")
-    logger.info(f"Check interval: {check_interval} minutes")
-    logger.info(f"Mode: {'TEST' if test else 'LIVE'}")
-    logger.info(f"Log file: {log_file}")
-    logger.info("=" * 60)
-
-    console.print(Panel.fit(
-        f"[bold]Amount/Day:[/bold] ${amount:,.2f}\n"
-        f"[bold]Target:[/bold] +{target}% | [bold]Stop:[/bold] -{stop}%\n"
-        f"[bold]Pre-Market:[/bold] {pre_market_hours}h before open\n"
-        f"[bold]Check Interval:[/bold] {check_interval} minutes\n"
-        f"[bold]Mode:[/bold] {'TEST' if test else 'LIVE'}\n"
-        f"[bold]Log:[/bold] {log_file}",
-        title="🤖 Autonomous AI Trading",
-    ))
-
-    daily_trades = []
-    invested_today = False
-    last_trade_date = None
-
-    try:
-        while True:
-            now = datetime.now(ET)
-            today = now.date()
-
-            # Reset daily state if new day
-            if last_trade_date != today:
-                daily_trades = []
-                invested_today = False
-                last_trade_date = today
-                logger.info(f"📅 New trading day: {today}")
-
-            # Get market status
-            try:
-                status = _get_market_status(investor)
-            except Exception as e:
-                logger.error(f"Could not get market status: {e}")
-                time.sleep(60)
-                continue
-
-            market_open = status["next_open"].astimezone(ET) if status["next_open"] else None
-
-            # === PRE-MARKET PHASE ===
-            if not status["is_open"] and market_open:
-                pre_market_time = market_open - timedelta(hours=pre_market_hours)
-
-                if now >= pre_market_time and now < market_open and not invested_today:
-                    logger.info("=" * 40)
-                    logger.info("🌅 PRE-MARKET ANALYSIS PHASE")
-                    logger.info("=" * 40)
-
-                    # Show account status
-                    try:
-                        account = investor.get_account()
-                        logger.info(f"Portfolio: ${account['equity']:.2f} | Cash: ${account['cash']:.2f}")
-
-                        if account["positions"]:
-                            logger.info(f"Open positions: {list(account['positions'].keys())}")
-                    except Exception as e:
-                        logger.error(f"Could not get account: {e}")
-
-                    # Analyze opportunities
-                    logger.info(f"🔍 Analyzing opportunities for ${amount:.2f}...")
-                    try:
-                        picks, market_view, risk_level = investor.analyze_opportunities(Decimal(str(amount)))
-
-                        if picks:
-                            logger.info(f"📊 Market View: {market_view}")
-                            logger.info(f"⚠️  Risk Level: {risk_level}")
-                            logger.info(f"📋 Picks ({len(picks)}):")
-                            for pick in picks:
-                                logger.info(f"   {pick['symbol']}: ${pick['amount']:.2f} ({pick['strategy']}) "
-                                          f"Target +{pick['target_pct']}% Stop -{pick['stop_loss_pct']}%")
-                                logger.info(f"      {pick['rationale'][:80]}...")
-
-                            # Store picks for execution at market open
-                            investor._pending_picks = picks
-                        else:
-                            logger.info("❌ No quality opportunities found")
-                            investor._pending_picks = []
-                    except Exception as e:
-                        logger.error(f"Analysis failed: {e}")
-                        investor._pending_picks = []
-
-                    # Wait for market open
-                    wait_seconds = (market_open - datetime.now(ET)).total_seconds()
-                    if wait_seconds > 0:
-                        logger.info(f"⏳ Waiting {wait_seconds/60:.1f} minutes for market open...")
-                        time.sleep(min(wait_seconds, 300))  # Check every 5 min max
-
-                elif now < pre_market_time:
-                    # Too early, wait until pre-market
-                    wait_seconds = (pre_market_time - now).total_seconds()
-                    logger.info(f"😴 Market closed. Pre-market analysis at {pre_market_time.strftime('%H:%M ET')}")
-                    logger.info(f"   Sleeping {wait_seconds/3600:.1f} hours...")
-                    _log_state(log_dir, investor, daily_trades)
-                    time.sleep(min(wait_seconds, 3600))  # Check every hour max
-                    continue
-                else:
-                    # After market hours, wait for next day
-                    logger.info(f"🌙 Market closed for today. Next open: {market_open.strftime('%Y-%m-%d %H:%M ET')}")
-                    _log_state(log_dir, investor, daily_trades)
-                    time.sleep(3600)  # Check every hour
-                    continue
-
-            # === MARKET OPEN - EXECUTE TRADES ===
-            if status["is_open"] and not invested_today:
-                logger.info("=" * 40)
-                logger.info("🔔 MARKET OPEN - EXECUTING TRADES")
-                logger.info("=" * 40)
-
-                picks = getattr(investor, "_pending_picks", None)
-
-                # If no pending picks (started during market hours), analyze now
-                if not picks:
-                    logger.info("🔍 No pre-market picks, analyzing now...")
-                    try:
-                        picks, market_view, risk_level = investor.analyze_opportunities(Decimal(str(amount)))
-                        if picks:
-                            logger.info(f"📊 Found {len(picks)} opportunities")
-                    except Exception as e:
-                        logger.error(f"Analysis failed: {e}")
-                        picks = []
-
-                if picks:
-                    executed = []
-                    for pick in picks:
-                        try:
-                            if investor.execute_buy(pick["symbol"], pick["amount"], test_mode=test):
-                                executed.append(pick)
-
-                                # Track in DB
-                                if not test:
-                                    try:
-                                        investor.positions_repo.open_position(
-                                            symbol=pick["symbol"],
-                                            quantity=pick["amount"] / pick["price"],
-                                            entry_price=pick["price"],
-                                            stop_loss_pct=pick.get("stop_loss_pct", stop),
-                                            target_pct=pick.get("target_pct", target),
-                                            strategy=pick.get("strategy"),
-                                            rationale=pick.get("rationale"),
-                                        )
-                                    except Exception as e:
-                                        logger.warning(f"Could not track {pick['symbol']} in DB: {e}")
-
-                                daily_trades.append({
-                                    "time": datetime.now().isoformat(),
-                                    "action": "BUY",
-                                    "symbol": pick["symbol"],
-                                    "amount": float(pick["amount"]),
-                                })
-                                logger.info(f"✅ BUY {pick['symbol']}: ${pick['amount']:.2f}")
-                        except Exception as e:
-                            logger.error(f"Failed to buy {pick['symbol']}: {e}")
-
-                    if executed:
-                        total = sum(p["amount"] for p in executed)
-                        logger.info(f"💰 Deployed ${total:.2f} across {len(executed)} positions")
-                    else:
-                        logger.warning("❌ No trades executed")
-                else:
-                    logger.info("📭 No opportunities to trade today")
-
-                invested_today = True
-                investor._pending_picks = None
-                _log_state(log_dir, investor, daily_trades)
-
-            # === MARKET HOURS - MONITOR POSITIONS ===
-            if status["is_open"]:
-                try:
-                    account = investor.get_account()
-
-                    if account["positions"]:
-                        logger.info(f"👁️  Checking {len(account['positions'])} positions...")
-
-                        for symbol, pos in account["positions"].items():
-                            pnl_pct = pos["pnl_pct"]
-
-                            # Get position-specific targets from DB
-                            db_pos = investor.positions_repo.get_open_position(symbol)
-                            pos_target = db_pos.target_pct if db_pos else target
-                            pos_stop = db_pos.stop_loss_pct if db_pos else stop
-
-                            logger.info(f"   {symbol}: ${pos['market_value']:.2f} ({pnl_pct:+.2f}%) "
-                                       f"[T:+{pos_target}% S:-{pos_stop}%]")
-
-                            # Check exit conditions
-                            if pnl_pct >= pos_target:
-                                logger.info(f"   🎯 {symbol} HIT TARGET! Selling...")
-                                if investor.execute_sell(symbol, pos["qty"], test_mode=test):
-                                    if db_pos and not test:
-                                        investor.positions_repo.close_position(
-                                            db_pos.id, pos["current_price"], "target_hit"
-                                        )
-                                    daily_trades.append({
-                                        "time": datetime.now().isoformat(),
-                                        "action": "SELL_TARGET",
-                                        "symbol": symbol,
-                                        "pnl_pct": pnl_pct,
-                                    })
-                                    logger.info(f"   ✅ SOLD {symbol} at +{pnl_pct:.2f}%")
-
-                            elif pnl_pct <= -pos_stop:
-                                logger.info(f"   🛑 {symbol} HIT STOP! Selling...")
-                                if investor.execute_sell(symbol, pos["qty"], test_mode=test):
-                                    if db_pos and not test:
-                                        investor.positions_repo.close_position(
-                                            db_pos.id, pos["current_price"], "stop_loss"
-                                        )
-                                    daily_trades.append({
-                                        "time": datetime.now().isoformat(),
-                                        "action": "SELL_STOP",
-                                        "symbol": symbol,
-                                        "pnl_pct": pnl_pct,
-                                    })
-                                    logger.info(f"   ✅ SOLD {symbol} at {pnl_pct:.2f}%")
-                    else:
-                        logger.info("📭 No positions to monitor")
-
-                    _log_state(log_dir, investor, daily_trades)
-
-                except Exception as e:
-                    logger.error(f"Error checking positions: {e}")
-
-                # Sleep until next check
-                time.sleep(check_interval * 60)
-
-            # Exit if --once flag
-            if once and invested_today:
-                logger.info("🏁 Single cycle complete (--once flag). Exiting.")
-                break
-
-    except KeyboardInterrupt:
-        logger.info("⛔ Interrupted by user. Shutting down...")
-        _log_state(log_dir, investor, daily_trades)
-    except Exception as e:
-        logger.error(f"Fatal error: {e}")
-        raise
-
-    logger.info("=" * 60)
-    logger.info("🤖 AUTONOMOUS AI TRADING STOPPED")
-    logger.info("=" * 60)
-
 
 # =============================================================================
 # V2 AI INVESTOR COMMANDS
@@ -1779,7 +1457,7 @@ def power_hour(
 
 
 @ai_app.command()
-def auto_v2(
+def auto(
     target_return: float = typer.Option(20.0, "--target", "-t", help="Target return % (annualized)"),
     max_drawdown: float = typer.Option(10.0, "--max-dd", help="Maximum drawdown %"),
     day_trade_target: float = typer.Option(5.0, "--dt-target", help="Day trade profit target %"),
@@ -1791,7 +1469,7 @@ def auto_v2(
     once: bool = typer.Option(False, "--once", help="Run one cycle then exit"),
 ) -> None:
     """
-    Run V2 Autonomous AI Trading (thesis-driven).
+    Run autonomous AI trading (thesis-driven).
     
     This is the FULLY AUTOMATED trading system that:
     
@@ -1810,7 +1488,7 @@ def auto_v2(
     - Position Manager (market hours)
     
     Example:
-        bvr ai auto-v2 --target 20 --max-dd 10 --dt-target 5 --dt-stop 3 &
+        bvr ai auto --target 20 --max-dd 10 --dt-target 5 --dt-stop 3 &
     """
     from beavr.agents import (
         DueDiligenceAgent,
@@ -1833,7 +1511,7 @@ def auto_v2(
     _setup_auto_logging(log_file)
 
     logger.info("=" * 60)
-    logger.info("🤖 V2 AUTONOMOUS AI TRADING")
+    logger.info("🤖 AUTONOMOUS AI TRADING")
     logger.info("=" * 60)
     logger.info(f"Target Return: {target_return}%")
     logger.info(f"Max Drawdown: {max_drawdown}%")
@@ -1846,7 +1524,7 @@ def auto_v2(
     logger.info("=" * 60)
 
     console.print(Panel.fit(
-        f"[bold]🤖 V2 Autonomous AI Trading[/bold]\n\n"
+        f"[bold]🤖 Autonomous AI Trading[/bold]\n\n"
         f"Target Return: {target_return}%\n"
         f"Max Drawdown: {max_drawdown}%\n"
         f"Day Trade: +{day_trade_target}% / -{day_trade_stop}% (R/R {day_trade_target/day_trade_stop:.1f}:1)\n"
@@ -1855,7 +1533,7 @@ def auto_v2(
         f"Research Interval: {research_interval} min\n"
         f"Mode: {'[yellow]TEST[/yellow]' if test else '[green]LIVE[/green]'}\n"
         f"Log: {log_file}",
-        title="V2 Architecture",
+        title="Autonomous Trading",
     ))
 
     # Build configuration
@@ -1947,7 +1625,7 @@ def auto_v2(
     except Exception as e:
         logger.warning(f"Could not get account status: {e}")
 
-    console.print(f"\n[bold green]Starting V2 Autonomous Trading{'...' if not once else ' (single cycle)'}[/bold green]")
+    console.print(f"\n[bold green]Starting Autonomous Trading{'...' if not once else ' (single cycle)'}[/bold green]")
     console.print("[dim]Press Ctrl+C to stop[/dim]\n")
 
     try:
@@ -1979,5 +1657,5 @@ def auto_v2(
         logger.error(f"Fatal error: {e}")
         raise
 
-    console.print("\n[bold]V2 Autonomous Trading stopped[/bold]")
+    console.print("\n[bold]Autonomous Trading stopped[/bold]")
 
