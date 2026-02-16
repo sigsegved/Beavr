@@ -24,9 +24,10 @@ def version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main(
-    version: bool = typer.Option(
+    ctx: typer.Context,
+    version: bool = typer.Option(  # noqa: ARG001
         None,
         "--version",
         "-v",
@@ -36,7 +37,8 @@ def main(
     ),
 ) -> None:
     """Beavr - Auto Trading Platform for retail investors."""
-    pass
+    if ctx.invoked_subcommand is None:
+        console.print(ctx.get_help())
 
 
 @app.command()
