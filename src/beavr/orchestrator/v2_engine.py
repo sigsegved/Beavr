@@ -1287,13 +1287,74 @@ class V2AutonomousOrchestrator:
         Run the overnight DD research cycle.
 
         This is the deep research phase where we:
-        1. Get pending theses that need DD
-        2. Run DD agent on each
-        3. Save DD reports
-        4. Mark theses as approved/rejected
+        1. Scan earnings calendar (if configured)
+        2. Get pending theses that need DD
+        3. Run DD agent on each
+        4. Save DD reports
+        5. Mark theses as approved/rejected
         """
+        # Step 1: Earnings calendar scan
+        self._scan_earnings_calendar()
+
+        # Step 2-5: Regular DD cycle
         candidates = self._get_pending_dd_candidates()
         self._run_dd_cycle(candidates, "🌙 OVERNIGHT DD RESEARCH CYCLE")
+
+    def _scan_earnings_calendar(self) -> None:
+        """Daily earnings calendar scan — runs once during OVERNIGHT_DD phase.
+
+        Fetches upcoming earnings, generates theses via EarningsPlayAgent,
+        and queues them for DD (standard pipeline).
+        """
+        if not hasattr(self, "_earnings_fetcher") or not self._earnings_fetcher:
+            return
+        if not hasattr(self, "_earnings_agent") or not self._earnings_agent:
+            return
+
+        try:
+            events = self._earnings_fetcher.fetch_upcoming_earnings(horizon_days=14)
+            if not events:
+                return
+
+            logger.info(f"📅 Earnings scan found {len(events)} upcoming events")
+            self._log_decision(
+                decision_type="earnings_scan",
+                action=f"found {len(events)} upcoming earnings",
+            )
+
+            # Filter to events within 5 days and build context
+            today = date.today()
+            near_events = [
+                e for e in events
+                if e.earnings_date and 0 <= (e.earnings_date - today).days <= 5
+            ]
+
+            if not near_events:
+                logger.info("📅 No earnings within 5-day window")
+                return
+
+            for event in near_events:
+                if not event.symbol:
+                    continue
+
+                try:
+                    ctx = self._build_context([event.symbol])
+                    thesis = self._earnings_agent.analyze_earnings_opportunity(event, ctx)
+                    if thesis and self.thesis_repo:
+                        self.thesis_repo.save_thesis(thesis)
+                        logger.info(f"📅 Generated earnings thesis for {event.symbol}")
+                        self._log_decision(
+                            decision_type="thesis_created",
+                            action="earnings_play",
+                            symbol=event.symbol,
+                            reasoning=thesis.entry_rationale,
+                            confidence=thesis.confidence,
+                        )
+                except Exception as exc:
+                    logger.warning(f"Earnings analysis failed for {event.symbol}: {exc}")
+
+        except Exception as exc:
+            logger.warning(f"Earnings calendar scan failed: {exc}")
     
     def _run_pre_market_scan(self) -> list[str]:
         """

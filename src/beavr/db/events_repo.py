@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional
 
@@ -246,7 +246,7 @@ class EventsRepository:
             List of upcoming earnings events
         """
         today = date.today()
-        end_date = date.today().replace(day=today.day + days_ahead)
+        end_date = today + timedelta(days=days_ahead)
         
         with self.db.connect() as conn:
             rows = conn.execute(

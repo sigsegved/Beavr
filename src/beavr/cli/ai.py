@@ -1049,6 +1049,63 @@ def _show_audit_trail(stores: Any, portfolio_name: Optional[str], limit: int) ->
 
 
 # =============================================================================
+# EARNINGS COMMAND
+# =============================================================================
+
+
+@ai_app.command("earnings")
+def earnings(
+    days: int = typer.Option(14, "--days", "-d", help="Horizon in days"),
+    symbol: Optional[str] = typer.Option(None, "--symbol", "-s", help="Filter by symbol"),
+) -> None:
+    """View upcoming earnings calendar.
+
+    Fetches earnings from the local event database.  To populate the
+    calendar, run ``bvr ai auto`` which scans overnight.
+    """
+    from beavr.db.factory import create_sqlite_stores
+
+    stores = create_sqlite_stores()
+
+    try:
+        events = stores.events.get_upcoming_earnings(days_ahead=days)
+    except Exception:
+        console.print("[dim]No earnings data found. Run bvr ai auto to populate.[/dim]")
+        raise typer.Exit(0) from None
+
+    if symbol:
+        events = [e for e in events if e.symbol and e.symbol.upper() == symbol.upper()]
+
+    if not events:
+        console.print(f"[dim]No upcoming earnings in next {days} days.[/dim]")
+        raise typer.Exit(0)
+
+    table = Table(title=f"📅 Upcoming Earnings (next {days} days)")
+    table.add_column("Symbol", style="cyan")
+    table.add_column("Date")
+    table.add_column("EPS Est.", justify="right")
+    table.add_column("Rev Est.", justify="right")
+    table.add_column("Source", style="dim")
+    table.add_column("Status")
+
+    for e in events:
+        date_str = e.earnings_date.isoformat() if e.earnings_date else "TBD"
+        eps_str = f"${e.estimate_eps}" if e.estimate_eps else "-"
+        rev_str = f"${e.estimate_revenue:,.0f}" if e.estimate_revenue else "-"
+        status = "[green]Thesis ✓[/green]" if e.thesis_generated else "[dim]Pending[/dim]"
+        table.add_row(
+            e.symbol or "?",
+            date_str,
+            eps_str,
+            rev_str,
+            e.source,
+            status,
+        )
+
+    console.print(table)
+
+
+# =============================================================================
 # RESET COMMAND
 # =============================================================================
 

@@ -157,3 +157,28 @@ max_completion_tokens = 4096  # Longer for comprehensive reports
 use_vscode_auth = true
 # Or use PAT token for CLI
 pat_env = "GITHUB_TOKEN"
+
+# =============================================================================
+# Earnings Calendar Integration
+# =============================================================================
+
+[earnings]
+enabled = true
+scan_horizon_days = 14          # How far ahead to look for earnings
+play_entry_days_before = 5      # Earliest entry for pre-earnings plays
+min_market_cap = 2_000_000_000  # $2B minimum for earnings plays (higher bar)
+min_avg_volume = 1_000_000      # Higher volume requirement for earnings
+max_plays_per_week = 3          # Limit earnings exposure
+alpha_vantage_api_key = ""      # Set via ALPHA_VANTAGE_API_KEY env var
+
+[earnings.pre_earnings_drift]
+enabled = true
+target_pct = 5.0
+stop_pct = 3.0
+min_historical_beat_rate = 0.6  # Beat estimates 60%+ of last 4 quarters
+
+[earnings.post_earnings_momentum]
+enabled = true
+target_pct = 8.0
+stop_pct = 4.0
+min_gap_pct = 3.0              # Minimum gap to enter post-earnings
