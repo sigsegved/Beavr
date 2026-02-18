@@ -957,10 +957,9 @@ def history(
 
     # Human-friendly labels for each decision type
     _ACTION_LABELS: dict[str, str] = {
-        "thesis_created": "📝 Thesis",
-        "dd_approved": "✅ DD Approved",
-        "dd_rejected": "❌ DD Rejected",
-        "dd_conditional": "⚠️  DD Conditional",
+        "dd_approved": "✅ Approved",
+        "dd_rejected": "❌ Rejected",
+        "dd_conditional": "⚠️  Conditional",
         "trade_entered": "💰 Buy",
         "trade_skipped": "⏭️  Skipped",
         "position_exit_target": "🎯 Sell (target)",
@@ -1005,31 +1004,52 @@ def history(
             console.print("  [dim]No activity yet.[/dim]\n")
             continue
 
-        table = Table(show_header=True, header_style="bold", expand=False)
-        table.add_column("Date", style="dim", width=16)
-        table.add_column("Action", width=22)
-        table.add_column("Symbol", style="cyan", width=8)
-        table.add_column("Details", max_width=50)
-        table.add_column("Amount", justify="right", width=12)
-        table.add_column("P/L", justify="right", width=12)
+        table = Table(
+            show_header=True,
+            header_style="bold",
+            expand=False,
+            padding=(0, 1),
+            show_lines=False,
+        )
+        table.add_column("Date", style="dim", width=11)
+        table.add_column("Action", width=18)
+        table.add_column("Sym", style="cyan", width=6)
+        table.add_column("Details", no_wrap=False, max_width=44)
+        table.add_column("Amt", justify="right", width=10)
+        table.add_column("P/L", justify="right", width=8)
+
+        import re
 
         for d in decisions:
             dt = d.decision_type.value
             style = _DECISION_STYLES.get(dt, "white")
             label = _ACTION_LABELS.get(dt, dt.replace("_", " ").title())
 
-            # Amount column: show for buys and sells
-            amt = ""
-            if d.amount:
-                amt = f"${d.amount:,.2f}"
+            # ── Build detail string based on decision type ────────
+            detail = ""
+            if dt == "trade_entered":
+                # Show the thesis reasoning, not "buy"
+                detail = (d.reasoning or "")[:44]
+            elif dt in ("dd_approved", "dd_rejected", "dd_conditional"):
+                # Show confidence + first meaningful part of reasoning
+                conf = f"{d.confidence:.0%} " if d.confidence else ""
+                raw = d.reasoning or ""
+                # Strip the redundant "DD approved: approve" prefix
+                raw = re.sub(r"^DD (approved|rejected|conditional):?\s*\w*\s*", "", raw, flags=re.I)
+                raw = re.sub(r"^(approve|reject|conditional)\s*", "", raw, flags=re.I)
+                detail = f"{conf}{raw}".strip()[:44]
+            elif "exit" in dt:
+                detail = (d.reasoning or "")[:44]
+            else:
+                detail = (d.reasoning or d.action or "")[:44]
 
-            # P/L column: show for exit decisions
+            # ── Amount: show for buys and sells ───────────────────
+            amt = f"${d.amount:,.0f}" if d.amount else ""
+
+            # ── P/L: extract from exit reasoning or outcome ───────
             pnl = ""
-            if d.price and "exit" in dt:
+            if "exit" in dt:
                 pnl_reasoning = d.reasoning or ""
-                # Extract pnl% from reasoning like "Exit: target_hit (+5.2%)"
-                import re
-
                 pct_match = re.search(r"\(([+-][\d.]+)%\)", pnl_reasoning)
                 if pct_match:
                     pct_val = float(pct_match.group(1))
@@ -1038,16 +1058,13 @@ def history(
             if d.outcome_details and d.outcome_details.get("pnl"):
                 pnl_val = float(d.outcome_details["pnl"])
                 pnl_s = "green" if pnl_val >= 0 else "red"
-                pnl = f"[{pnl_s}]${pnl_val:+,.2f}[/{pnl_s}]"
-
-            # Details: reasoning or action summary, truncated
-            reason = (d.reasoning or d.action or "")[:50]
+                pnl = f"[{pnl_s}]${pnl_val:+,.0f}[/{pnl_s}]"
 
             table.add_row(
                 d.timestamp.strftime("%m/%d %H:%M"),
                 f"[{style}]{label}[/{style}]",
                 d.symbol or "",
-                reason,
+                detail,
                 amt,
                 pnl,
             )
