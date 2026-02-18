@@ -939,9 +939,9 @@ def history(
             raise typer.Exit(1)
         portfolios = matches
 
-    # All pipeline decision types worth showing (excludes internal noise)
+    # Pipeline decision types that represent outcomes (not noise)
+    # Thesis creation is excluded — too noisy; DD results show the outcome
     _PIPELINE_TYPES = {
-        DecisionType.THESIS_CREATED,
         DecisionType.DD_APPROVED,
         DecisionType.DD_REJECTED,
         DecisionType.DD_CONDITIONAL,
