@@ -315,6 +315,7 @@ class SQLiteDecisionStore:
         symbol: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
+        decision_types: Optional[list[str]] = None,
     ) -> list[PortfolioDecision]:
         """Query decisions with optional filters and pagination.
 
@@ -323,7 +324,11 @@ class SQLiteDecisionStore:
         """
         query = "SELECT * FROM portfolio_decisions WHERE portfolio_id = ?"
         params: list[object] = [portfolio_id]
-        if decision_type is not None:
+        if decision_types is not None:
+            placeholders = ", ".join("?" for _ in decision_types)
+            query += f" AND decision_type IN ({placeholders})"
+            params.extend(decision_types)
+        elif decision_type is not None:
             query += " AND decision_type = ?"
             params.append(decision_type)
         if symbol is not None:

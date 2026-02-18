@@ -807,15 +807,18 @@ class DecisionStore(Protocol):
         symbol: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
+        decision_types: Optional[list[str]] = None,
     ) -> list[PortfolioDecision]:
         """Query decisions with optional filters and pagination.
 
         Args:
             portfolio_id: Portfolio to query.
-            decision_type: Filter by ``DecisionType`` value.
+            decision_type: Filter by single ``DecisionType`` value.
             symbol: Filter by trading symbol.
             limit: Maximum decisions to return.
             offset: Number of decisions to skip (for pagination).
+            decision_types: Filter by multiple ``DecisionType`` values
+                (SQL ``IN``).  Mutually exclusive with *decision_type*.
 
         Returns:
             List of matching decisions, most recent first.

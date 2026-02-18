@@ -980,8 +980,10 @@ def history(
         ))
 
         # ── Recent trade decisions ────────────────────────────────
-        all_decisions = stores.decisions.get_decisions(pf.id, limit=limit * 3)
-        trade_decisions = [d for d in all_decisions if d.decision_type in _TRADE_TYPES][:limit]
+        trade_type_values = [t.value for t in _TRADE_TYPES]
+        trade_decisions = stores.decisions.get_decisions(
+            pf.id, limit=limit, decision_types=trade_type_values,
+        )
 
         if not trade_decisions:
             console.print("  [dim]No trade activity yet.[/dim]\n")
