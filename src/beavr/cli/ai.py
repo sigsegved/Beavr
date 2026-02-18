@@ -939,8 +939,8 @@ def history(
             raise typer.Exit(1)
         portfolios = matches
 
-    # Trade-relevant decision types
-    _TRADE_TYPES = {
+    # All pipeline decision types worth showing (excludes internal noise)
+    _PIPELINE_TYPES = {
         DecisionType.THESIS_CREATED,
         DecisionType.DD_APPROVED,
         DecisionType.DD_REJECTED,
@@ -953,6 +953,22 @@ def history(
         DecisionType.POSITION_EXIT_INVALIDATED,
         DecisionType.POSITION_EXIT_MANUAL,
         DecisionType.POSITION_PARTIAL_EXIT,
+    }
+
+    # Human-friendly labels for each decision type
+    _ACTION_LABELS: dict[str, str] = {
+        "thesis_created": "📝 Thesis",
+        "dd_approved": "✅ DD Approved",
+        "dd_rejected": "❌ DD Rejected",
+        "dd_conditional": "⚠️  DD Conditional",
+        "trade_entered": "💰 Buy",
+        "trade_skipped": "⏭️  Skipped",
+        "position_exit_target": "🎯 Sell (target)",
+        "position_exit_stop": "🛑 Sell (stop)",
+        "position_exit_time": "⏰ Sell (time)",
+        "position_exit_invalidated": "🚫 Sell (invalid)",
+        "position_exit_manual": "✋ Sell (manual)",
+        "position_partial_exit": "📉 Partial sell",
     }
 
     for pf in portfolios:
@@ -979,36 +995,53 @@ def history(
             expand=False,
         ))
 
-        # ── Recent trade decisions ────────────────────────────────
-        trade_type_values = [t.value for t in _TRADE_TYPES]
-        trade_decisions = stores.decisions.get_decisions(
-            pf.id, limit=limit, decision_types=trade_type_values,
+        # ── Recent pipeline decisions ─────────────────────────────
+        pipeline_type_values = [t.value for t in _PIPELINE_TYPES]
+        decisions = stores.decisions.get_decisions(
+            pf.id, limit=limit, decision_types=pipeline_type_values,
         )
 
-        if not trade_decisions:
-            console.print("  [dim]No trade activity yet.[/dim]\n")
+        if not decisions:
+            console.print("  [dim]No activity yet.[/dim]\n")
             continue
 
         table = Table(show_header=True, header_style="bold", expand=False)
         table.add_column("Date", style="dim", width=16)
         table.add_column("Action", width=22)
         table.add_column("Symbol", style="cyan", width=8)
-        table.add_column("Details")
-        table.add_column("Amount", justify="right")
-        table.add_column("P/L", justify="right")
+        table.add_column("Details", max_width=50)
+        table.add_column("Amount", justify="right", width=12)
+        table.add_column("P/L", justify="right", width=12)
 
-        for d in trade_decisions:
-            style = _DECISION_STYLES.get(d.decision_type.value, "white")
-            label = d.decision_type.value.replace("_", " ").title()
+        for d in decisions:
+            dt = d.decision_type.value
+            style = _DECISION_STYLES.get(dt, "white")
+            label = _ACTION_LABELS.get(dt, dt.replace("_", " ").title())
 
-            amt = f"${d.amount:,.2f}" if d.amount else ""
+            # Amount column: show for buys and sells
+            amt = ""
+            if d.amount:
+                amt = f"${d.amount:,.2f}"
+
+            # P/L column: show for exit decisions
             pnl = ""
+            if d.price and "exit" in dt:
+                pnl_reasoning = d.reasoning or ""
+                # Extract pnl% from reasoning like "Exit: target_hit (+5.2%)"
+                import re
+
+                pct_match = re.search(r"\(([+-][\d.]+)%\)", pnl_reasoning)
+                if pct_match:
+                    pct_val = float(pct_match.group(1))
+                    pnl_s = "green" if pct_val >= 0 else "red"
+                    pnl = f"[{pnl_s}]{pct_val:+.1f}%[/{pnl_s}]"
             if d.outcome_details and d.outcome_details.get("pnl"):
                 pnl_val = float(d.outcome_details["pnl"])
                 pnl_s = "green" if pnl_val >= 0 else "red"
                 pnl = f"[{pnl_s}]${pnl_val:+,.2f}[/{pnl_s}]"
 
-            reason = (d.reasoning or d.action)[:45]
+            # Details: reasoning or action summary, truncated
+            reason = (d.reasoning or d.action or "")[:50]
 
             table.add_row(
                 d.timestamp.strftime("%m/%d %H:%M"),
