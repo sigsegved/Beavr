@@ -6,10 +6,14 @@ from beavr.llm.client import (
     LLMConfig,
     get_agent_config,
 )
+from beavr.llm.usage import UsageRecord, UsageSummary, UsageTracker
 
 __all__ = [
     "AGENT_MODEL_DEFAULTS",
     "LLMClient",
     "LLMConfig",
+    "UsageRecord",
+    "UsageSummary",
+    "UsageTracker",
     "get_agent_config",
 ]

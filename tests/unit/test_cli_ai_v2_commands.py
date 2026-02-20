@@ -54,7 +54,7 @@ class _FakeInvestor:
 
 
 class _FakeLLMClient:
-    def __init__(self, config) -> None:  # noqa: ANN001
+    def __init__(self, config, agent_name: str = "") -> None:  # noqa: ANN001
         self.config = config
 
 

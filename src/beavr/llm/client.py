@@ -12,10 +12,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, TypeVar
 
 from pydantic import BaseModel, Field
+
+from beavr.llm.usage import UsageRecord, UsageTracker
 
 logger = logging.getLogger(__name__)
 
@@ -108,11 +111,12 @@ class LLMClient:
     _loop: Any = None
     _loop_thread: Any = None
 
-    def __init__(self, config: Optional[LLMConfig] = None):
+    def __init__(self, config: Optional[LLMConfig] = None, agent_name: str = ""):
         """Initialize LLM client.
 
         Args:
             config: Optional configuration
+            agent_name: Name of the agent using this client (for usage tracking)
         """
         try:
             from copilot import CopilotClient  # type: ignore[import-not-found]
@@ -124,9 +128,12 @@ class LLMClient:
             ) from e
 
         self.config = config or LLMConfig()
+        self._agent_name = agent_name
         self._client: Any = None
         self._session: Any = None
         self._initialized = False
+        self._usage_tracker = UsageTracker.get_instance()
+        self._usage_unsubscribe: Any = None
 
         # Create a dedicated event loop for this client
         self._setup_event_loop()
@@ -162,6 +169,30 @@ class LLMClient:
 
         if self._session is None:
             self._session = await self._client.create_session({"model": self.config.model})
+            self._register_usage_handler()
+
+    def _register_usage_handler(self) -> None:
+        """Register an event handler to capture ASSISTANT_USAGE events."""
+        from copilot.generated.session_events import SessionEventType  # type: ignore[import-not-found]
+
+        def on_event(event: Any) -> None:
+            if event.type != SessionEventType.ASSISTANT_USAGE:
+                return
+            data = event.data
+            try:
+                record = UsageRecord(
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                    model=getattr(data, "model", self.config.model) or self.config.model,
+                    input_tokens=int(getattr(data, "input_tokens", 0) or 0),
+                    output_tokens=int(getattr(data, "output_tokens", 0) or 0),
+                    cache_read_tokens=int(getattr(data, "cache_read_tokens", 0) or 0),
+                    cache_write_tokens=int(getattr(data, "cache_write_tokens", 0) or 0),
+                    cost=getattr(data, "cost", None),
+                    agent=self._agent_name,
+                )
+                self._usage_tracker.record(record)
+            except Exception as e:
+                logger.debug(f"Failed to record usage: {e}")
 
     async def _recreate_session_async(self):
         """Recreate the session if it was lost."""
@@ -171,7 +202,7 @@ class LLMClient:
         except Exception:
             pass
         self._session = None
-        await self._ensure_session_async()
+        await self._ensure_session_async()  # Will re-register usage handler
 
     async def _reason_async(
         self,

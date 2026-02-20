@@ -1475,7 +1475,7 @@ def news(
 
     # Initialize agent
     config = get_agent_config("news_monitor")
-    llm = LLMClient(config)
+    llm = LLMClient(config, agent_name="news_monitor")
     _agent = NewsMonitorAgent(llm)  # Agent ready for real news API integration
 
     with console.status("[bold green]Scanning for market events..."):
@@ -1523,7 +1523,7 @@ def thesis(
 
     # Initialize agent
     config = get_agent_config("thesis_generator")
-    llm = LLMClient(config)
+    llm = LLMClient(config, agent_name="thesis_generator")
     agent = ThesisGeneratorAgent(llm)
 
     # Create event object
@@ -1715,7 +1715,7 @@ def dd(
 
     # Initialize agent (save handled by CLI so we can print exact file paths)
     config = get_agent_config("due_diligence")
-    llm = LLMClient(config)
+    llm = LLMClient(config, agent_name="due_diligence")
     agent = DueDiligenceAgent(llm, save_reports=False)
 
     console.print(f"[dim]Model: {config.model} (optimized for deep research)[/dim]")
@@ -1817,11 +1817,11 @@ def power_hour(
 
     # Initialize agents
     executor_config = get_agent_config("trade_executor")
-    executor_llm = LLMClient(executor_config)
+    executor_llm = LLMClient(executor_config, agent_name="trade_executor")
     executor = TradeExecutorAgent(executor_llm)
 
     position_config = get_agent_config("position_manager")
-    position_llm = LLMClient(position_config)
+    position_llm = LLMClient(position_config, agent_name="position_manager")
     _position_manager = PositionManagerAgent(position_llm)  # For exit monitoring
 
     console.print(f"\n[dim]Executor model: {executor_config.model}[/dim]")
@@ -1974,27 +1974,27 @@ def auto(
     console.print("\n[dim]Initializing agents...[/dim]")
 
     news_config = get_agent_config("news_monitor")
-    news_llm = LLMClient(news_config)
+    news_llm = LLMClient(news_config, agent_name="news_monitor")
     news_monitor = NewsMonitorAgent(news_llm)
 
     thesis_config = get_agent_config("thesis_generator")
-    thesis_llm = LLMClient(thesis_config)
+    thesis_llm = LLMClient(thesis_config, agent_name="thesis_generator")
     thesis_generator = ThesisGeneratorAgent(thesis_llm)
 
     dd_config = get_agent_config("due_diligence")
-    dd_llm = LLMClient(dd_config)
+    dd_llm = LLMClient(dd_config, agent_name="due_diligence")
     dd_agent = DueDiligenceAgent(dd_llm)
 
     scanner_config = get_agent_config("morning_scanner")
-    scanner_llm = LLMClient(scanner_config)
+    scanner_llm = LLMClient(scanner_config, agent_name="morning_scanner")
     morning_scanner = MorningScannerAgent(scanner_llm)
 
     executor_config = get_agent_config("trade_executor")
-    executor_llm = LLMClient(executor_config)
+    executor_llm = LLMClient(executor_config, agent_name="trade_executor")
     trade_executor = TradeExecutorAgent(executor_llm)
 
     position_config = get_agent_config("position_manager")
-    position_llm = LLMClient(position_config)
+    position_llm = LLMClient(position_config, agent_name="position_manager")
     position_manager = PositionManagerAgent(position_llm)
 
     console.print("[green]✓[/green] Agents initialized")
@@ -2104,4 +2104,138 @@ def auto(
         raise
 
     console.print("\n[bold]Autonomous Trading stopped[/bold]")
+
+
+@ai_app.command()
+def usage(
+    days: int = typer.Option(7, "--days", "-d", help="Number of days to show"),
+    by_model: bool = typer.Option(False, "--by-model", "-m", help="Break down by model"),
+    by_agent: bool = typer.Option(False, "--by-agent", "-a", help="Break down by agent"),
+    daily: bool = typer.Option(False, "--daily", help="Show daily breakdown"),
+) -> None:
+    """
+    Show LLM token usage and estimated costs.
+
+    Tracks all API calls made by AI agents including token counts
+    and costs reported by the Copilot SDK.
+    """
+    from beavr.llm.usage import UsageTracker
+
+    tracker = UsageTracker.get_instance()
+    since = date.today() - timedelta(days=days - 1)
+
+    if daily:
+        daily_summaries = tracker.summarize_daily(since=since)
+        if not daily_summaries:
+            console.print("\n[dim]No usage data found[/dim]")
+            console.print("[dim]Usage is recorded automatically when AI agents run[/dim]")
+            return
+
+        table = Table(title=f"📊 Daily LLM Usage (last {days} days)")
+        table.add_column("Date", style="cyan", width=12)
+        table.add_column("Calls", justify="right", width=7)
+        table.add_column("Input", justify="right", width=10)
+        table.add_column("Output", justify="right", width=10)
+        table.add_column("Total", justify="right", width=10)
+        table.add_column("Cost", justify="right", width=10)
+
+        grand_calls = 0
+        grand_input = 0
+        grand_output = 0
+        grand_cost = Decimal("0")
+
+        for day_key, s in daily_summaries.items():
+            total = s.total_input_tokens + s.total_output_tokens
+            cost_str = f"${s.total_cost:.4f}" if s.total_cost else "—"
+            table.add_row(
+                day_key,
+                str(s.total_calls),
+                f"{s.total_input_tokens:,}",
+                f"{s.total_output_tokens:,}",
+                f"{total:,}",
+                cost_str,
+            )
+            grand_calls += s.total_calls
+            grand_input += s.total_input_tokens
+            grand_output += s.total_output_tokens
+            grand_cost += s.total_cost
+
+        table.add_section()
+        grand_total = grand_input + grand_output
+        grand_cost_str = f"${grand_cost:.4f}" if grand_cost else "—"
+        table.add_row(
+            "[bold]Total[/bold]",
+            f"[bold]{grand_calls}[/bold]",
+            f"[bold]{grand_input:,}[/bold]",
+            f"[bold]{grand_output:,}[/bold]",
+            f"[bold]{grand_total:,}[/bold]",
+            f"[bold]{grand_cost_str}[/bold]",
+        )
+
+        console.print()
+        console.print(table)
+        return
+
+    summary = tracker.summarize(since=since)
+
+    if summary.total_calls == 0:
+        console.print("\n[dim]No usage data found[/dim]")
+        console.print("[dim]Usage is recorded automatically when AI agents run[/dim]")
+        return
+
+    total_tokens = summary.total_input_tokens + summary.total_output_tokens
+    cost_str = f"${summary.total_cost:.4f}" if summary.total_cost else "—"
+
+    console.print()
+    console.print(Panel.fit(
+        f"[bold]Total Calls:[/bold] {summary.total_calls:,}\n"
+        f"[bold]Input Tokens:[/bold] {summary.total_input_tokens:,}\n"
+        f"[bold]Output Tokens:[/bold] {summary.total_output_tokens:,}\n"
+        f"[bold]Cache Read:[/bold] {summary.total_cache_read_tokens:,}\n"
+        f"[bold]Cache Write:[/bold] {summary.total_cache_write_tokens:,}\n"
+        f"[bold]Total Tokens:[/bold] {total_tokens:,}\n"
+        f"[bold]Estimated Cost:[/bold] {cost_str}\n"
+        f"[bold]Period:[/bold] last {days} days",
+        title="📊 LLM Usage Summary",
+    ))
+
+    if by_model and summary.by_model:
+        table = Table(title="By Model")
+        table.add_column("Model", style="cyan", width=30)
+        table.add_column("Calls", justify="right", width=7)
+        table.add_column("Input", justify="right", width=10)
+        table.add_column("Output", justify="right", width=10)
+        table.add_column("Total", justify="right", width=10)
+
+        for model, stats in sorted(summary.by_model.items()):
+            total = stats["input"] + stats["output"]
+            table.add_row(
+                model,
+                str(stats["calls"]),
+                f"{stats['input']:,}",
+                f"{stats['output']:,}",
+                f"{total:,}",
+            )
+        console.print()
+        console.print(table)
+
+    if by_agent and summary.by_agent:
+        table = Table(title="By Agent")
+        table.add_column("Agent", style="cyan", width=20)
+        table.add_column("Calls", justify="right", width=7)
+        table.add_column("Input", justify="right", width=10)
+        table.add_column("Output", justify="right", width=10)
+        table.add_column("Total", justify="right", width=10)
+
+        for agent, stats in sorted(summary.by_agent.items()):
+            total = stats["input"] + stats["output"]
+            table.add_row(
+                agent,
+                str(stats["calls"]),
+                f"{stats['input']:,}",
+                f"{stats['output']:,}",
+                f"{total:,}",
+            )
+        console.print()
+        console.print(table)
 

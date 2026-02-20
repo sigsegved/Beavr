@@ -113,7 +113,7 @@ class MultiAgentStrategy(BaseStrategy):
             model=self.params.llm_model,
             temperature=self.params.llm_temperature,
         )
-        self._llm = LLMClient(config=config)
+        self._llm = LLMClient(config=config, agent_name="multi_agent")
 
         # Create agents
         market_analyst = MarketAnalystAgent(self._llm)
