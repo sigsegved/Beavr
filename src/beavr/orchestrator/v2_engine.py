@@ -496,6 +496,10 @@ class V2AutonomousOrchestrator:
         
         # Reset daily state if new day
         self._check_daily_reset()
+
+        # Rebuild dd_runs_today from the database so that a restart
+        # mid-day does not repeat DD work already completed today.
+        self._rebuild_dd_runs_from_db()
     
     def _check_daily_reset(self) -> None:
         """Reset daily counters when the date rolls over.
@@ -516,6 +520,44 @@ class V2AutonomousOrchestrator:
             self.state.dd_runs_today = {}
             self.state.last_research_run = None
             self._save_state()
+
+    def _rebuild_dd_runs_from_db(self) -> None:
+        """Rebuild *dd_runs_today* from the DD reports database.
+
+        On restart the persisted state file may be stale or manually edited,
+        causing ``dd_runs_today`` to be empty even though DD reports were
+        already generated earlier today.  This method queries the database
+        (the authoritative source) and back-fills any missing entries so
+        that :py:meth:`_should_run_dd` correctly skips already-researched
+        symbols.
+        """
+        if not self.dd_repo:
+            return
+
+        try:
+            today_start = datetime.combine(
+                self.state.current_date, datetime.min.time()
+            )
+            db_runs = self.dd_repo.get_runs_since(today_start)
+
+            merged = 0
+            for symbol, info in db_runs.items():
+                existing = self.state.dd_runs_today.get(symbol)
+                if existing is None or existing.get("count", 0) < info["count"]:
+                    self.state.dd_runs_today[symbol] = info
+                    merged += 1
+                # Also keep dd_completed_tonight consistent
+                if symbol not in self.state.dd_completed_tonight:
+                    self.state.dd_completed_tonight.append(symbol)
+
+            if merged:
+                logger.info(
+                    f"Rebuilt dd_runs_today from DB: {merged} symbols merged "
+                    f"({len(self.state.dd_runs_today)} total tracked)"
+                )
+                self._save_state()
+        except Exception as e:
+            logger.warning(f"Could not rebuild dd_runs_today from DB: {e}")
     
     def _save_state(self) -> None:
         """Save state to disk."""

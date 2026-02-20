@@ -269,6 +269,39 @@ class DDReportsRepository:
             for row in rows
         ]
     
+    def get_runs_since(self, since: datetime) -> dict[str, dict]:
+        """
+        Get DD run counts and last-run timestamps since a given time.
+
+        Useful for rebuilding ``dd_runs_today`` from the database on restart
+        so that symbols already researched today are not re-processed.
+
+        Args:
+            since: Only consider reports created at or after this time.
+
+        Returns:
+            Dict mapping symbol → {"count": int, "last_run": str (ISO)}.
+        """
+        with self.db.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT symbol, COUNT(*) AS cnt, MAX(timestamp) AS last_ts
+                FROM dd_reports
+                WHERE timestamp >= ?
+                GROUP BY symbol
+                """,
+                (since.isoformat(),),
+            ).fetchall()
+
+        result: dict[str, dict] = {}
+        for row in rows:
+            result[row[0]] = {
+                "count": row[1],
+                "last_run": row[2],
+                "has_major_event": False,
+            }
+        return result
+
     def _row_to_report(self, row: tuple) -> DueDiligenceReport:
         """Convert database row to DueDiligenceReport."""
         risk_factors = json.loads(row[9]) if row[9] else []
