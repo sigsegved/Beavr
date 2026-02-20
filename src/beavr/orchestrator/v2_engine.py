@@ -495,6 +495,15 @@ class V2AutonomousOrchestrator:
                 self.state = SystemState()
         
         # Reset daily state if new day
+        self._check_daily_reset()
+    
+    def _check_daily_reset(self) -> None:
+        """Reset daily counters when the date rolls over.
+        
+        Called at startup (via _load_state) and at the top of every
+        main-loop iteration so that an orchestrator running continuously
+        across midnight correctly resets trades_today, daily_pnl, etc.
+        """
         today = date.today()
         if self.state.current_date != today:
             logger.info(f"New day: {today}, resetting daily state")
@@ -506,6 +515,7 @@ class V2AutonomousOrchestrator:
             self.state.dd_completed_tonight = []
             self.state.dd_runs_today = {}
             self.state.last_research_run = None
+            self._save_state()
     
     def _save_state(self) -> None:
         """Save state to disk."""
@@ -1812,6 +1822,10 @@ class V2AutonomousOrchestrator:
         
         while self._running and not self._shutdown_requested:
             try:
+                # Reset daily counters on date rollover (critical for
+                # continuous operation across midnight)
+                self._check_daily_reset()
+                
                 now = datetime.now(ET)
                 current_phase = self._get_current_phase()
                 
