@@ -23,6 +23,22 @@ from beavr.models.dd_report import DDRecommendation, DueDiligenceReport, Recomme
 from beavr.models.thesis import TradeDirection, TradeThesis, TradeType
 
 
+class _FakeThesisRepository:
+    """Minimal ThesisRepository for testing plans command."""
+
+    def __init__(self, theses: list[TradeThesis] | None = None) -> None:
+        self._theses = theses or []
+
+    def get_active(self) -> list[TradeThesis]:
+        return [t for t in self._theses if t.status.value in ("draft", "active")]
+
+    def get_by_symbol(self, symbol: str, status=None) -> list[TradeThesis]:  # noqa: ANN001
+        results = [t for t in self._theses if t.symbol == symbol]
+        if status is not None:
+            results = [t for t in results if t.status == status]
+        return results
+
+
 class _FakeFetcher:
     def __init__(self, df: pd.DataFrame) -> None:
         self._df = df
@@ -161,3 +177,54 @@ class TestAIV2CliCommands:
         assert result.exit_code == 0
         assert "Due Diligence" in result.output
         assert "AAPL" in result.output
+
+    def test_plans_command_shows_active_theses(self, monkeypatch) -> None:
+        runner = CliRunner()
+        df = _sample_bars_df()
+
+        today = datetime(2026, 2, 4).date()
+        thesis = TradeThesis(
+            symbol="TSLA",
+            trade_type=TradeType.SWING_SHORT,
+            direction=TradeDirection.LONG,
+            entry_rationale="Momentum breakout",
+            catalyst="Earnings beat",
+            entry_price_target=Decimal("200.00"),
+            profit_target=Decimal("220.00"),
+            stop_loss=Decimal("190.00"),
+            expected_exit_date=today + timedelta(days=10),
+            max_hold_date=today + timedelta(days=14),
+            confidence=0.72,
+            source="test",
+        )
+
+        fake_repo = _FakeThesisRepository([thesis])
+
+        monkeypatch.setattr(ai_cli, "get_investor", lambda: _FakeInvestor(df))
+
+        # Patch ThesisRepository constructor to return our fake
+        import beavr.db.thesis_repo as thesis_repo_mod
+        monkeypatch.setattr(thesis_repo_mod, "ThesisRepository", lambda _db: fake_repo)
+
+        result = runner.invoke(ai_cli.ai_app, ["plans"])
+        assert result.exit_code == 0
+        assert "TSLA" in result.output
+        assert "Trading Plans" in result.output
+        # Verify summary stats are present
+        assert "pending DD" in result.output
+        assert "1 plans" in result.output
+
+    def test_plans_command_no_theses(self, monkeypatch) -> None:
+        runner = CliRunner()
+        df = _sample_bars_df()
+
+        fake_repo = _FakeThesisRepository([])
+
+        monkeypatch.setattr(ai_cli, "get_investor", lambda: _FakeInvestor(df))
+
+        import beavr.db.thesis_repo as thesis_repo_mod
+        monkeypatch.setattr(thesis_repo_mod, "ThesisRepository", lambda _db: fake_repo)
+
+        result = runner.invoke(ai_cli.ai_app, ["plans"])
+        assert result.exit_code == 0
+        assert "No trading plans found" in result.output

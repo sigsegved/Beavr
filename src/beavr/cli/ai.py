@@ -1578,6 +1578,170 @@ def thesis(
 
 
 @ai_app.command()
+def plans(
+    show_all: bool = typer.Option(
+        False, "--all", "-a", help="Include closed/invalidated theses"
+    ),
+    symbol: Optional[str] = typer.Option(
+        None, "--symbol", "-s", help="Filter by symbol"
+    ),
+) -> None:
+    """
+    Show a snapshot of all trading plans (theses).
+
+    Displays entry targets, stop losses, profit targets, R/R ratio,
+    expected exit dates, DD approval status, and current P/L for
+    positions that have been executed.
+    """
+    from beavr.db.thesis_repo import ThesisRepository
+
+    investor = get_investor()
+    repo = ThesisRepository(investor.db)
+
+    # Fetch theses
+    if symbol:
+        from beavr.models.thesis import ThesisStatus
+
+        status_filter = None if show_all else ThesisStatus.ACTIVE
+        theses = repo.get_by_symbol(symbol.upper(), status=status_filter)
+        if not theses and not show_all:
+            # Also grab drafts
+            theses = repo.get_by_symbol(symbol.upper())
+    else:
+        theses = repo.get_active() if not show_all else []
+        if show_all:
+            # get_active returns draft+active; for --all, pull everything
+            with investor.db.connect() as conn:
+                rows = conn.execute(
+                    "SELECT * FROM trade_theses ORDER BY created_at DESC LIMIT 100"
+                ).fetchall()
+            theses = [repo._row_to_thesis(row) for row in rows]
+
+    if not theses:
+        console.print("\n[dim]No trading plans found. "
+                       "Run [bold]bvr ai auto[/bold] to generate theses.[/dim]")
+        raise typer.Exit(0)
+
+    # Fetch current positions from broker for live P/L
+    broker_positions: dict[str, dict] = {}
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            progress.add_task("Fetching live prices...", total=None)
+            account = investor.get_account()
+            broker_positions = account.get("positions", {})
+    except Exception:
+        pass  # Show table without live prices
+
+    # ---- Build table ----
+    table = Table(
+        title="📋 Trading Plans",
+        show_lines=True,
+        caption=f"{len(theses)} plans" + (" (active only — use --all for history)" if not show_all else ""),
+    )
+    table.add_column("Symbol", style="cyan bold", no_wrap=True)
+    table.add_column("Type", no_wrap=True)
+    table.add_column("Entry", justify="right")
+    table.add_column("Now", justify="right")
+    table.add_column("Target", justify="right")
+    table.add_column("Stop", justify="right")
+    table.add_column("R/R", justify="right")
+    table.add_column("Upside", justify="right")
+    table.add_column("Downside", justify="right")
+    table.add_column("P/L", justify="right")
+    table.add_column("DD", no_wrap=True)
+    table.add_column("Exit By", no_wrap=True)
+    table.add_column("Status", no_wrap=True)
+
+    for t in theses:
+        # Trade type short labels
+        type_labels = {
+            "day_trade": "[yellow]Day[/yellow]",
+            "swing_short": "[cyan]Sw-S[/cyan]",
+            "swing_medium": "[blue]Sw-M[/blue]",
+            "swing_long": "[magenta]Sw-L[/magenta]",
+        }
+        trade_type = type_labels.get(t.trade_type.value, t.trade_type.value)
+
+        # Current price from broker
+        bp = broker_positions.get(t.symbol)
+        current_price_str = ""
+        pnl_str = ""
+        if bp:
+            cur = bp["current_price"]
+            current_price_str = f"${cur:.2f}"
+            pnl_pct = bp["pnl_pct"]
+            pnl_style = "green" if pnl_pct >= 0 else "red"
+            pnl_str = f"[{pnl_style}]{pnl_pct:+.1f}%[/{pnl_style}]"
+
+        # Upside / downside from entry target
+        upside_pct = float((t.profit_target - t.entry_price_target) / t.entry_price_target * 100) if t.entry_price_target else 0
+        downside_pct = float((t.entry_price_target - t.stop_loss) / t.entry_price_target * 100) if t.entry_price_target else 0
+
+        # DD status
+        if t.dd_approved:
+            dd_str = "[green]✓[/green]"
+        elif t.status.value in ("closed", "invalidated"):
+            dd_str = "[dim]—[/dim]"
+        else:
+            dd_str = "[yellow]pending[/yellow]"
+
+        # R/R ratio
+        rr = t.risk_reward_ratio
+        rr_style = "green" if rr >= 2.0 else ("yellow" if rr >= 1.0 else "red")
+        rr_str = f"[{rr_style}]{rr:.1f}:1[/{rr_style}]"
+
+        # Status
+        status_styles = {
+            "draft": "[dim]draft[/dim]",
+            "active": "[cyan]active[/cyan]",
+            "executed": "[green]executed[/green]",
+            "closed": "[dim]closed[/dim]",
+            "invalidated": "[red]invalid[/red]",
+        }
+        status_str = status_styles.get(t.status.value, t.status.value)
+
+        # Exit date
+        exit_str = t.expected_exit_date.isoformat() if t.expected_exit_date else "—"
+        # Highlight overdue
+        if t.expected_exit_date and t.expected_exit_date < date.today() and t.status.value in ("active", "executed"):
+            exit_str = f"[red]{exit_str}[/red]"
+
+        table.add_row(
+            t.symbol,
+            trade_type,
+            f"${t.entry_price_target:.2f}",
+            current_price_str or "[dim]—[/dim]",
+            f"${t.profit_target:.2f}",
+            f"${t.stop_loss:.2f}",
+            rr_str,
+            f"[green]+{upside_pct:.1f}%[/green]",
+            f"[red]-{downside_pct:.1f}%[/red]",
+            pnl_str or "[dim]—[/dim]",
+            dd_str,
+            exit_str,
+            status_str,
+        )
+
+    console.print()
+    console.print(table)
+
+    # Summary stats
+    approved = sum(1 for t in theses if t.dd_approved)
+    executed = sum(1 for t in theses if t.status.value == "executed")
+    pending = sum(1 for t in theses if not t.dd_approved and t.status.value in ("draft", "active"))
+    console.print(
+        f"\n  [green]✓ {approved} approved[/green]  "
+        f"[cyan]▶ {executed} executed[/cyan]  "
+        f"[yellow]⏳ {pending} pending DD[/yellow]"
+    )
+
+
+@ai_app.command()
 def dd(
     thesis_id: Optional[str] = typer.Option(
         None, "--thesis-id", "-t", help="Thesis ID to analyze"
