@@ -322,8 +322,15 @@ class DueDiligenceReport(BaseModel):
         date_str = self.timestamp.strftime("%Y-%m-%d")
         time_str = self.timestamp.strftime("%H%M%S")
         
-        # Create date-based directory
-        report_dir = base_dir / date_str
+        # Map recommendation to subfolder
+        verdict_folder = {
+            DDRecommendation.APPROVE: "approved",
+            DDRecommendation.CONDITIONAL: "approved",
+            DDRecommendation.REJECT: "rejected",
+        }.get(self.recommendation, "other")
+        
+        # Create date/verdict directory (e.g. logs/dd_reports/2026-02-19/approved/)
+        report_dir = base_dir / date_str / verdict_folder
         report_dir.mkdir(parents=True, exist_ok=True)
         
         # Create latest directory
