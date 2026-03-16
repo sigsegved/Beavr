@@ -2220,6 +2220,60 @@ def auto(
 
     orchestrator.set_context_builder(_build_ctx_with_directives)
 
+    # Wire up messaging/notifications if configured
+    _msg_provider = None
+    try:
+        settings = get_settings()
+        if settings.messaging and settings.messaging.enabled:
+            from beavr.messaging.api_impl import BeavrAPIImpl
+            from beavr.messaging.commands.analyze import (
+                AnalyzeCommandHandler,
+                DDCommandHandler,
+                ResearchCommandHandler,
+                SectorCommandHandler,
+            )
+            from beavr.messaging.commands.router import CommandRouter
+            from beavr.messaging.commands.status import (
+                HistoryCommandHandler,
+                PositionsCommandHandler,
+                StatusCommandHandler,
+            )
+            from beavr.messaging.commands.trading import TradingCommandHandler
+            from beavr.messaging.providers.factory import MessagingProviderFactory
+            from beavr.messaging.service import NotificationService
+
+            _msg_provider = MessagingProviderFactory.create(settings.messaging)
+            notification_service = NotificationService(provider=_msg_provider)
+            orchestrator.set_notification_service(notification_service)
+
+            # Set up command router with BeavrAPI boundary
+            if settings.messaging.accept_commands:
+                api = BeavrAPIImpl(
+                    broker=investor.broker,
+                    positions_repo=investor.positions_repo,
+                    dd_repo=dd_repo,
+                    events_repo=events_repo,
+                    thesis_repo=thesis_repo,
+                    llm_client=dd_llm,
+                )
+                cmd_router = CommandRouter()
+                cmd_router.register(StatusCommandHandler(api=api))
+                cmd_router.register(PositionsCommandHandler(api=api))
+                cmd_router.register(HistoryCommandHandler(api=api))
+                cmd_router.register(TradingCommandHandler(api=api))
+                cmd_router.register(AnalyzeCommandHandler(api=api))
+                cmd_router.register(DDCommandHandler(api=api))
+                cmd_router.register(SectorCommandHandler(api=api))
+                cmd_router.register(ResearchCommandHandler(api=api))
+                _msg_provider.set_command_callback(cmd_router.route)
+
+            console.print(f"[green]✓[/green] Messaging connected ({_msg_provider.provider_name})")
+        else:
+            console.print("[dim]ℹ Messaging not enabled (set BEAVR_MESSAGING__ENABLED=true)[/dim]")
+    except Exception as e:
+        logger.warning(f"Could not initialize messaging: {e}")
+        console.print(f"[yellow]⚠[/yellow] Messaging unavailable: {e}")
+
     console.print("[green]✓[/green] Orchestrator ready")
 
     # Show account status
@@ -2237,6 +2291,26 @@ def auto(
 
     console.print(f"\n[bold green]Starting Autonomous Trading{'...' if not once else ' (single cycle)'}[/bold green]")
     console.print("[dim]Press Ctrl+C to stop[/dim]\n")
+
+    # Start bot listener in background thread (for inbound commands)
+    _bot_thread = None
+    if _msg_provider and settings.messaging and settings.messaging.accept_commands:
+        import asyncio
+        import threading
+
+        def _run_bot_listener() -> None:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_until_complete(_msg_provider.start_listening())
+            except Exception:
+                logger.debug("Bot listener stopped", exc_info=True)
+            finally:
+                loop.close()
+
+        _bot_thread = threading.Thread(target=_run_bot_listener, daemon=True)
+        _bot_thread.start()
+        console.print("[green]✓[/green] Bot listener started (accepting commands)")
 
     try:
         if once:
@@ -2263,6 +2337,9 @@ def auto(
     except KeyboardInterrupt:
         logger.info("⛔ Shutdown requested")
         orchestrator.stop()
+        if _msg_provider:
+            import asyncio
+            asyncio.run(_msg_provider.stop_listening())
     except Exception as e:
         logger.error(f"Fatal error: {e}")
         raise

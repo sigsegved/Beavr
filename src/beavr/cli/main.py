@@ -6,6 +6,7 @@ from rich.console import Console
 from beavr import __version__
 from beavr.cli.ai import ai_app
 from beavr.cli.backtest import backtest_app
+from beavr.cli.messaging import app as messaging_app
 
 app = typer.Typer(
     name="bvr",
@@ -14,6 +15,7 @@ app = typer.Typer(
 )
 app.add_typer(backtest_app, name="backtest")
 app.add_typer(ai_app, name="ai")
+app.add_typer(messaging_app, name="messaging")
 console = Console()
 
 

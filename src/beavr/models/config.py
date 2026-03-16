@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -97,6 +97,68 @@ class NewsProviderConfig(BaseModel):
     provider: Optional[str] = Field(default=None, description="News provider (e.g. 'alpaca')")
 
 
+class TelegramConfig(BaseModel):
+    """Telegram Bot configuration.
+
+    Attributes:
+        bot_token_env: Environment variable name for the Telegram bot token
+        verified_chat_ids: Pre-verified Telegram chat IDs (use /chatid to discover)
+    """
+
+    bot_token_env: str = Field(
+        default="BEAVR_TELEGRAM_BOT_TOKEN",
+        description="Env var for Telegram bot token",
+    )
+    verified_chat_ids: list[str] = Field(
+        default_factory=list,
+        description="Pre-verified Telegram chat IDs",
+    )
+
+    @field_validator("verified_chat_ids", mode="before")
+    @classmethod
+    def _coerce_chat_ids(cls, v: Any) -> list[str]:
+        """Accept a single int/str or comma-separated string from env vars."""
+        if isinstance(v, (int, float)):
+            return [str(int(v))]
+        if isinstance(v, str):
+            return [s.strip() for s in v.split(",") if s.strip()]
+        if isinstance(v, list):
+            return [str(i) for i in v]
+        return v
+
+    def get_bot_token(self) -> Optional[str]:
+        """Get Telegram bot token from environment."""
+        return os.environ.get(self.bot_token_env)
+
+
+class MessagingConfig(BaseModel):
+    """Messaging and notification system configuration.
+
+    Attributes:
+        enabled: Whether the messaging system is active
+        provider: Active messaging provider name
+        telegram: Telegram-specific configuration
+        notify_on_dd: Send notifications for DD reports
+        notify_on_trade: Send notifications for trade executions
+        notify_on_stop_loss: Send notifications when stop loss is hit
+        notify_on_target: Send notifications when target is hit
+        accept_commands: Accept inbound commands from verified users
+    """
+
+    enabled: bool = Field(default=False, description="Enable messaging system")
+    provider: Literal["telegram"] = Field(
+        default="telegram", description="Messaging provider"
+    )
+    telegram: Optional[TelegramConfig] = Field(
+        default=None, description="Telegram provider config"
+    )
+    notify_on_dd: bool = Field(default=True, description="Notify on DD reports")
+    notify_on_trade: bool = Field(default=True, description="Notify on trades")
+    notify_on_stop_loss: bool = Field(default=True, description="Notify on stop hits")
+    notify_on_target: bool = Field(default=True, description="Notify on target hits")
+    accept_commands: bool = Field(default=True, description="Accept inbound commands")
+
+
 class StrategyConfig(BaseModel):
     """Configuration for a single strategy instance.
 
@@ -128,6 +190,7 @@ class AppConfig(BaseSettings):
 
     alpaca: AlpacaConfig = Field(default_factory=AlpacaConfig)
     broker: Optional[BrokerProviderConfig] = Field(default=None, description="Broker provider config")
+    messaging: Optional[MessagingConfig] = Field(default=None, description="Messaging system config")
     data_dir: Path = Field(
         default_factory=lambda: Path.home() / ".beavr",
         description="Data directory"

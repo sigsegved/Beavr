@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Generator, Optional, Union
 
 from beavr.db.schema import SCHEMA_SQL
 from beavr.db.schema_v2 import SCHEMA_V2_SQL
+from beavr.messaging.schema import SCHEMA_MESSAGING_SQL
 
 if TYPE_CHECKING:
     from sqlite3 import Connection
@@ -55,6 +56,8 @@ class Database:
             conn.executescript(SCHEMA_SQL)
             # Also apply v2 schema for AI Investor thesis support
             conn.executescript(SCHEMA_V2_SQL)
+            # Messaging audit log tables
+            conn.executescript(SCHEMA_MESSAGING_SQL)
 
     @contextmanager
     def connect(self) -> Generator[Connection, None, None]:

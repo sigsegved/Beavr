@@ -168,7 +168,12 @@ class LLMClient:
             await self._client.start()
 
         if self._session is None:
-            self._session = await self._client.create_session({"model": self.config.model})
+            from copilot import PermissionHandler  # type: ignore[import-not-found]
+
+            self._session = await self._client.create_session({
+                "model": self.config.model,
+                "on_permission_request": PermissionHandler.approve_all,
+            })
             self._register_usage_handler()
 
     def _register_usage_handler(self) -> None:

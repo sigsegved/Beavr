@@ -332,6 +332,9 @@ class V2AutonomousOrchestrator:
         self._screener: Optional[ScreenerProvider] = None
         self._news_provider: Optional[NewsProvider] = None
 
+        # Messaging / notifications (set externally via set_notification_service)
+        self._notification_service: Optional[Any] = None
+
     # ------------------------------------------------------------------
     # Decision logging
     # ------------------------------------------------------------------
@@ -481,6 +484,122 @@ class V2AutonomousOrchestrator:
     def set_context_builder(self, builder) -> None:
         """Set the function to build AgentContext for symbols."""
         self._ctx_builder = builder
+
+    def set_notification_service(self, service: Any) -> None:
+        """Set the notification service for outbound messaging.
+
+        Args:
+            service: A NotificationService instance.
+        """
+        self._notification_service = service
+
+    # ------------------------------------------------------------------
+    # Notification helpers (fire-and-forget, never block trading logic)
+    # ------------------------------------------------------------------
+
+    def _notify_dd_report(self, dd_report: Any) -> None:
+        """Send a DD report notification if messaging is configured."""
+        if not self._notification_service:
+            return
+        try:
+            import asyncio
+
+            coro = self._notification_service.notify_dd_report(
+                symbol=dd_report.symbol,
+                recommendation=dd_report.recommendation.value,
+                confidence=dd_report.confidence,
+                trade_type=getattr(dd_report, "recommended_trade_type", None)
+                and dd_report.recommended_trade_type.value
+                or None,
+                entry=dd_report.recommended_entry,
+                target=dd_report.recommended_target,
+                stop=dd_report.recommended_stop,
+                position_size_pct=dd_report.recommended_position_size_pct,
+                executive_summary=getattr(dd_report, "executive_summary", None),
+                risk_factors=dd_report.risk_factors,
+                bull_case=getattr(dd_report, "bull_case", None),
+                bear_case=getattr(dd_report, "bear_case", None),
+                base_case=getattr(dd_report, "base_case", None),
+            )
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(coro)
+            except RuntimeError:
+                asyncio.run(coro)
+        except Exception:
+            logger.debug("DD notification failed (non-critical)", exc_info=True)
+
+    def _notify_trade_executed(
+        self,
+        *,
+        action: str,
+        symbol: str,
+        quantity: Decimal,
+        price: Decimal,
+        total_cost: Optional[Decimal] = None,
+        stop_loss: Optional[Decimal] = None,
+        target: Optional[Decimal] = None,
+        order_id: Optional[str] = None,
+        thesis_summary: Optional[str] = None,
+    ) -> None:
+        """Send a trade execution notification if messaging is configured."""
+        if not self._notification_service:
+            return
+        try:
+            import asyncio
+
+            coro = self._notification_service.notify_trade_executed(
+                action=action,
+                symbol=symbol,
+                quantity=quantity,
+                price=price,
+                total_cost=total_cost,
+                stop_loss=stop_loss,
+                target=target,
+                order_id=order_id,
+                thesis_summary=thesis_summary,
+            )
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(coro)
+            except RuntimeError:
+                asyncio.run(coro)
+        except Exception:
+            logger.debug("Trade notification failed (non-critical)", exc_info=True)
+
+    def _notify_position_closed(
+        self,
+        *,
+        symbol: str,
+        exit_reason: str,
+        entry_price: Decimal,
+        exit_price: Decimal,
+        quantity: Decimal,
+        pnl_pct: float,
+    ) -> None:
+        """Send a position closure notification if messaging is configured."""
+        if not self._notification_service:
+            return
+        try:
+            import asyncio
+
+            pnl = (exit_price - entry_price) * quantity
+            coro = self._notification_service.notify_position_closed(
+                symbol=symbol,
+                exit_reason=exit_reason,
+                entry_price=entry_price,
+                exit_price=exit_price,
+                quantity=quantity,
+                pnl=pnl,
+                pnl_pct=pnl_pct,
+            )
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(coro)
+            except RuntimeError:
+                asyncio.run(coro)
+        except Exception:
+            logger.debug("Position close notification failed (non-critical)", exc_info=True)
     
     def _load_state(self) -> None:
         """Load state from disk."""
@@ -1235,13 +1354,22 @@ class V2AutonomousOrchestrator:
             logger.info("No pending DD candidates")
             return
 
-        logger.info(f"📋 {len(candidates)} candidates for DD review")
+        # Deduplicate: keep only the highest-confidence thesis per symbol
+        seen_symbols: dict[str, TradeThesis] = {}
+        for thesis in candidates:
+            existing = seen_symbols.get(thesis.symbol)
+            if existing is None or (thesis.confidence or 0) > (existing.confidence or 0):
+                seen_symbols[thesis.symbol] = thesis
+        deduped = list(seen_symbols.values())
+
+        logger.info(f"📋 {len(deduped)} unique symbols for DD review (from {len(candidates)} theses)")
         
         # Track stats for this cycle
         dd_run_count = 0
         dd_skipped_count = 0
+        skipped_reasons: dict[str, int] = {}
 
-        for thesis in candidates:
+        for thesis in deduped:
             symbol = thesis.symbol
             
             # Check for major event for this symbol
@@ -1251,7 +1379,7 @@ class V2AutonomousOrchestrator:
             should_run, reason = self._should_run_dd(symbol, has_major_event)
             
             if not should_run:
-                logger.info(f"  ⏭️  Skipping {symbol}: {reason}")
+                skipped_reasons[reason] = skipped_reasons.get(reason, 0) + 1
                 dd_skipped_count += 1
                 continue
 
@@ -1287,6 +1415,7 @@ class V2AutonomousOrchestrator:
                             confidence=dd_report.confidence,
                             reasoning=f"DD approved: {dd_report.recommendation.value}",
                         )
+                        self._notify_dd_report(dd_report)
 
                     elif dd_report.recommendation == DDRecommendation.CONDITIONAL:
                         logger.info(f"   ⚠️  CONDITIONAL (confidence: {dd_report.confidence:.0%})")
@@ -1299,6 +1428,7 @@ class V2AutonomousOrchestrator:
                             dd_report_id=dd_report.id,
                             confidence=dd_report.confidence,
                         )
+                        self._notify_dd_report(dd_report)
 
                     else:
                         reason = dd_report.rejection_rationale or "No reason provided"
@@ -1313,6 +1443,7 @@ class V2AutonomousOrchestrator:
                             dd_report_id=dd_report.id,
                             reasoning=reason,
                         )
+                        self._notify_dd_report(dd_report)
 
                     # Update thesis in DB
                     try:
@@ -1333,6 +1464,9 @@ class V2AutonomousOrchestrator:
 
         self._save_state()
         logger.info(f"\n✅ DD cycle complete: {dd_run_count} run, {dd_skipped_count} skipped")
+        if skipped_reasons:
+            for skip_reason, count in skipped_reasons.items():
+                logger.info(f"   ⏭️  {count} skipped: {skip_reason}")
 
     def _run_overnight_dd_cycle(self) -> None:
         """
@@ -1687,6 +1821,18 @@ class V2AutonomousOrchestrator:
                 price=current_price,
             )
 
+            self._notify_trade_executed(
+                action="buy",
+                symbol=thesis.symbol,
+                quantity=shares,
+                price=current_price,
+                total_cost=position_value,
+                stop_loss=thesis.stop_loss,
+                target=thesis.profit_target,
+                order_id=order.order_id,
+                thesis_summary=thesis.entry_rationale[:200],
+            )
+
             self._save_state()
             return True
             
@@ -1792,7 +1938,16 @@ class V2AutonomousOrchestrator:
                 )
             
             logger.info(f"✅ Closed {symbol} ({reason}): {pnl_pct:+.1f}%")
-            
+
+            self._notify_position_closed(
+                symbol=symbol,
+                exit_reason=reason,
+                entry_price=Decimal(str(pos.avg_cost)) if pos else Decimal("0"),
+                exit_price=Decimal(str(exit_price)),
+                quantity=pos.qty if pos else Decimal("0"),
+                pnl_pct=pnl_pct,
+            )
+
             # Map reason to decision type
             _reason_to_type = {
                 "target_hit": "position_exit_target",
