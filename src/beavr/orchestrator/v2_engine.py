@@ -497,13 +497,31 @@ class V2AutonomousOrchestrator:
     # Notification helpers (fire-and-forget, never block trading logic)
     # ------------------------------------------------------------------
 
+    def _run_notification(self, coro: Any) -> None:
+        """Run an async notification coroutine from sync context.
+
+        Uses a dedicated thread to avoid conflicts with the Telegram
+        listener's event loop.
+        """
+        import asyncio
+        import threading
+
+        def _run() -> None:
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(coro)
+            except Exception:
+                logger.debug("Notification delivery failed", exc_info=True)
+            finally:
+                loop.close()
+
+        threading.Thread(target=_run, daemon=True).start()
+
     def _notify_dd_report(self, dd_report: Any) -> None:
         """Send a DD report notification if messaging is configured."""
         if not self._notification_service:
             return
         try:
-            import asyncio
-
             coro = self._notification_service.notify_dd_report(
                 symbol=dd_report.symbol,
                 recommendation=dd_report.recommendation.value,
@@ -521,11 +539,7 @@ class V2AutonomousOrchestrator:
                 bear_case=getattr(dd_report, "bear_case", None),
                 base_case=getattr(dd_report, "base_case", None),
             )
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(coro)
-            except RuntimeError:
-                asyncio.run(coro)
+            self._run_notification(coro)
         except Exception:
             logger.debug("DD notification failed (non-critical)", exc_info=True)
 
@@ -546,8 +560,6 @@ class V2AutonomousOrchestrator:
         if not self._notification_service:
             return
         try:
-            import asyncio
-
             coro = self._notification_service.notify_trade_executed(
                 action=action,
                 symbol=symbol,
@@ -559,11 +571,7 @@ class V2AutonomousOrchestrator:
                 order_id=order_id,
                 thesis_summary=thesis_summary,
             )
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(coro)
-            except RuntimeError:
-                asyncio.run(coro)
+            self._run_notification(coro)
         except Exception:
             logger.debug("Trade notification failed (non-critical)", exc_info=True)
 
@@ -581,8 +589,6 @@ class V2AutonomousOrchestrator:
         if not self._notification_service:
             return
         try:
-            import asyncio
-
             pnl = (exit_price - entry_price) * quantity
             coro = self._notification_service.notify_position_closed(
                 symbol=symbol,
@@ -593,11 +599,7 @@ class V2AutonomousOrchestrator:
                 pnl=pnl,
                 pnl_pct=pnl_pct,
             )
-            try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(coro)
-            except RuntimeError:
-                asyncio.run(coro)
+            self._run_notification(coro)
         except Exception:
             logger.debug("Position close notification failed (non-critical)", exc_info=True)
     
