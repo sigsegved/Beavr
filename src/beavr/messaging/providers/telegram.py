@@ -232,6 +232,8 @@ class TelegramProvider:
             is_verified=True,
         )
 
+        logger.info("Telegram command: /%s %s (from %s)", command, " ".join(args), chat_id)
+
         try:
             result = await self._command_callback(inbound)
             await message.reply_text(result.message)

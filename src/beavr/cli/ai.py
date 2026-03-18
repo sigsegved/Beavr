@@ -2303,14 +2303,16 @@ def auto(
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
+                logger.info("Telegram bot listener starting...")
                 loop.run_until_complete(_msg_provider.start_listening())
             except Exception:
-                logger.debug("Bot listener stopped", exc_info=True)
+                logger.error("Bot listener crashed", exc_info=True)
             finally:
                 loop.close()
 
         _bot_thread = threading.Thread(target=_run_bot_listener, daemon=True)
         _bot_thread.start()
+        logger.info("✓ Telegram bot listener started (accepting commands)")
         console.print("[green]✓[/green] Bot listener started (accepting commands)")
 
     try:
