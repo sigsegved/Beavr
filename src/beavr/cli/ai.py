@@ -2255,6 +2255,7 @@ def auto(
                     events_repo=events_repo,
                     thesis_repo=thesis_repo,
                     llm_client=dd_llm,
+                    orchestrator=orchestrator,
                 )
                 cmd_router = CommandRouter()
                 cmd_router.register(StatusCommandHandler(api=api))

@@ -87,10 +87,10 @@ class BeavrAPI(Protocol):
         ...
 
     def submit_research(self, text: str) -> str:
-        """Submit freeform text as a market event for the system to process.
+        """Submit freeform text for analysis. Processes immediately.
 
-        Returns:
-            Status message confirming submission.
+        Uses LLM to extract symbols, creates events, and runs
+        thesis + DD synchronously. Returns a summary of results.
         """
         ...
 

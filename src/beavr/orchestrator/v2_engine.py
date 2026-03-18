@@ -493,6 +493,85 @@ class V2AutonomousOrchestrator:
         """
         self._notification_service = service
 
+    def process_user_research(self, events: list[Any]) -> list[dict[str, Any]]:
+        """Process user-submitted research events immediately.
+
+        Runs thesis generation and DD for the provided events outside
+        the normal research cycle. Called by BeavrAPI when a user submits
+        /research via Telegram.
+
+        Args:
+            events: List of MarketEvent objects from user submission.
+
+        Returns:
+            List of result dicts with symbol, recommendation, and summary.
+        """
+        if not events:
+            return []
+
+        results: list[dict[str, Any]] = []
+
+        # Generate theses from events
+        created_theses = self._generate_theses_from_events(events)
+
+        if not created_theses and self.thesis_repo:
+            # Events may have matched existing theses — run DD on those symbols
+            symbols = {e.symbol for e in events if e.symbol}
+            for symbol in symbols:
+                try:
+                    existing = self.thesis_repo.get_active_by_symbol(symbol)
+                    if existing:
+                        created_theses.append(existing)
+                except Exception:
+                    pass
+
+        if not created_theses:
+            return [{"symbol": e.symbol, "status": "no_thesis", "message": "No thesis generated"} for e in events if e.symbol]
+
+        # Run DD immediately (bypass normal dedup/cooldown)
+        if self.dd_agent:
+            for thesis in created_theses:
+                symbol = thesis.symbol
+                try:
+                    ctx = self._build_context([symbol])
+                    dd_report = self.dd_agent.analyze_thesis(thesis, ctx)
+
+                    if dd_report:
+                        if self.dd_repo:
+                            self.dd_repo.create(dd_report)
+
+                        rec = dd_report.recommendation.value
+                        result = {
+                            "symbol": symbol,
+                            "recommendation": rec,
+                            "confidence": dd_report.confidence,
+                            "summary": getattr(dd_report, "executive_summary", "") or "",
+                        }
+                        results.append(result)
+
+                        # Update thesis status based on DD
+                        from beavr.models.dd_report import DDRecommendation
+                        if dd_report.recommendation == DDRecommendation.APPROVE:
+                            thesis.dd_approved = True
+                            thesis.dd_report_id = dd_report.id
+                            thesis.status = ThesisStatus.ACTIVE
+                            self._notify_dd_report(dd_report)
+
+                        if self.thesis_repo:
+                            try:
+                                self.thesis_repo.update(thesis)
+                            except Exception:
+                                pass
+
+                        self._record_dd_run(symbol, True)
+                    else:
+                        results.append({"symbol": symbol, "status": "dd_failed", "message": "DD analysis returned no result"})
+                except Exception as e:
+                    logger.warning(f"User research DD failed for {symbol}: {e}")
+                    results.append({"symbol": symbol, "status": "error", "message": str(e)})
+
+        return results
+
     # ------------------------------------------------------------------
     # Notification helpers (fire-and-forget, never block trading logic)
     # ------------------------------------------------------------------

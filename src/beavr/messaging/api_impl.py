@@ -58,6 +58,7 @@ class BeavrAPIImpl:
         events_repo: Any = None,
         thesis_repo: Any = None,
         llm_client: Any = None,
+        orchestrator: Any = None,
     ) -> None:
         self._broker = broker
         self._positions_repo = positions_repo
@@ -65,6 +66,7 @@ class BeavrAPIImpl:
         self._events_repo = events_repo
         self._thesis_repo = thesis_repo
         self._llm = llm_client
+        self._orchestrator = orchestrator
 
     def get_portfolio_status(self) -> PortfolioSnapshot:
         """Get current portfolio snapshot."""
@@ -211,19 +213,21 @@ class BeavrAPIImpl:
             return f"❌ Failed to queue {symbol}: {e}"
 
     def submit_research(self, text: str) -> str:
-        """Submit freeform text for analysis.
+        """Submit freeform text for analysis. Processes immediately.
 
-        Uses the LLM to identify relevant symbols and context from
-        the user's text, then creates properly formed market events
-        for the orchestrator to process through the agent pipeline.
+        Uses the LLM to identify relevant symbols, creates market events,
+        and runs thesis + DD through the orchestrator synchronously.
+        Returns a summary of results.
         """
-        if not self._events_repo:
-            return "❌ Cannot submit research: events repository not available."
-
         if not self._llm:
             return "❌ Cannot submit research: LLM not available."
 
+        if not self._events_repo:
+            return "❌ Cannot submit research: events repository not available."
+
         try:
+            import json
+            import re
             from datetime import datetime
 
             from beavr.models.market_event import EventImportance, EventType, MarketEvent
@@ -237,7 +241,7 @@ class BeavrAPIImpl:
                 '"catalyst": "one sentence summary of the catalyst", '
                 '"sector": "affected sector if any"}\n\n'
                 "Rules:\n"
-                "- symbols: List of 1-5 stock ticker symbols most relevant to this observation.\n"
+                "- symbols: List of 1-5 stock ticker symbols most relevant.\n"
                 "- If a sector is mentioned but no specific stocks, include the sector ETF "
                 "(XLK for tech, XLE for energy, XLF for financials, XLV for healthcare, "
                 "SMH for semiconductors, XBI for biotech, XLC for communication, "
@@ -249,13 +253,9 @@ class BeavrAPIImpl:
             response = self._llm.complete(prompt)
 
             # Parse LLM response
-            import json
-            import re
-
-            # Extract JSON from response (handle markdown code blocks)
-            json_match = re.search(r'\{[^}]+\}', response)
+            json_match = re.search(r"\{[^}]+\}", response)
             if not json_match:
-                return "❌ Could not analyze the research text. Try including specific stock tickers."
+                return "❌ Could not analyze the text. Try including specific stock tickers."
 
             parsed = json.loads(json_match.group())
             symbols = parsed.get("symbols", [])
@@ -263,22 +263,20 @@ class BeavrAPIImpl:
 
             if not symbols:
                 return (
-                    "❌ No relevant symbols identified from your text.\n\n"
-                    "Try mentioning specific stocks or sectors, e.g.:\n"
-                    "  /research MU and NVDA rallying on AI chip demand\n"
-                    "  /research semiconductor sector showing strength"
+                    "❌ No relevant symbols identified.\n\n"
+                    "Try: /research MU and NVDA rallying on AI chip demand"
                 )
 
-            # Validate symbols (1-5 uppercase letters only)
             valid_symbols = [
                 s.upper() for s in symbols
                 if isinstance(s, str) and 1 <= len(s) <= 5 and s.isalpha()
-            ][:10]  # Cap at 10 symbols
+            ][:10]
 
             if not valid_symbols:
                 return "❌ No valid ticker symbols identified."
 
-            # Create one event per symbol
+            # Create events
+            created_events = []
             for symbol in valid_symbols:
                 event = MarketEvent(
                     event_type=EventType.OTHER,
@@ -290,17 +288,56 @@ class BeavrAPIImpl:
                     timestamp=datetime.utcnow(),
                 )
                 self._events_repo.create(event)
+                created_events.append(event)
 
             symbols_str = ", ".join(valid_symbols)
-            return (
-                f"📥 Research submitted for: {symbols_str}\n\n"
-                f"Catalyst: {catalyst}\n\n"
-                f"The system will process each symbol through:\n"
-                f"  1. Thesis Generator → create trade hypothesis\n"
-                f"  2. DD Agent → deep analysis\n"
-                f"  3. Notification → results sent to you\n\n"
-                f"Picked up in the next research cycle."
-            )
+
+            # Process immediately if orchestrator is available
+            if self._orchestrator and hasattr(self._orchestrator, "process_user_research"):
+                lines = [
+                    f"🔬 Research: {symbols_str}",
+                    f"Catalyst: {catalyst}",
+                    "",
+                    "Processing through agent pipeline...",
+                ]
+
+                try:
+                    results = self._orchestrator.process_user_research(created_events)
+
+                    if results:
+                        lines.append("")
+                        for r in results:
+                            sym = r.get("symbol", "?")
+                            rec = r.get("recommendation", r.get("status", "?"))
+                            conf = r.get("confidence")
+                            summary = r.get("summary") or r.get("message", "")
+                            if conf:
+                                lines.append(f"{sym}: {rec.upper()} ({int(conf * 100)}%)")
+                            else:
+                                lines.append(f"{sym}: {rec}")
+                            if summary:
+                                lines.append(f"  {summary[:150]}")
+                    else:
+                        lines.append("No actionable results from DD analysis.")
+
+                    # Approved DDs are auto-notified separately
+                    approved = [r for r in results if r.get("recommendation") == "approve"]
+                    if approved:
+                        lines.append(f"\n✅ {len(approved)} approved — full DD reports sent separately.")
+
+                except Exception as e:
+                    logger.exception("Error in immediate research processing")
+                    lines.append(f"\n⚠️ Processing error: {e}")
+                    lines.append("Events saved — will be retried in next research cycle.")
+
+                return "\n".join(lines)
+            else:
+                # Fallback: queue for next cycle
+                return (
+                    f"📥 Research submitted for: {symbols_str}\n\n"
+                    f"Catalyst: {catalyst}\n\n"
+                    f"Will be processed in the next research cycle."
+                )
         except Exception as e:
             logger.exception("Error submitting research")
             return f"❌ Research submission failed: {e}"
