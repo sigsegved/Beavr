@@ -496,9 +496,10 @@ class V2AutonomousOrchestrator:
     def process_user_research(self, events: list[Any]) -> list[dict[str, Any]]:
         """Process user-submitted research events immediately.
 
-        Runs thesis generation and DD for the provided events outside
-        the normal research cycle. Called by BeavrAPI when a user submits
-        /research via Telegram.
+        For user-initiated research, we create theses directly from the
+        events (the user already provided the catalyst) and run DD
+        immediately. This bypasses the normal thesis generator which
+        requires real-time price data.
 
         Args:
             events: List of MarketEvent objects from user submission.
@@ -510,30 +511,63 @@ class V2AutonomousOrchestrator:
             return []
 
         results: list[dict[str, Any]] = []
+        symbols = sorted({e.symbol for e in events if e.symbol})
 
-        # Generate theses from events
-        created_theses = self._generate_theses_from_events(events)
+        if not symbols:
+            return []
 
-        if not created_theses and self.thesis_repo:
-            # Events may have matched existing theses — run DD on those symbols
-            symbols = {e.symbol for e in events if e.symbol}
-            for symbol in symbols:
+        # Build context — try to get real market data
+        ctx = self._build_context(symbols)
+
+        # For each symbol: try thesis gen first, fall back to direct DD
+        for event in events:
+            if not event.symbol:
+                continue
+
+            symbol = event.symbol
+            thesis = None
+
+            # Try thesis generator if we have price data
+            current_price = ctx.prices.get(symbol)
+            if current_price and current_price > 0 and self.thesis_generator:
+                thesis = self.thesis_generator.generate_thesis_from_event(event, ctx)
+
+            # If thesis gen failed (no price data, etc.), create a minimal
+            # thesis so DD agent has something to analyze
+            if not thesis:
+                from datetime import timedelta
+
+                thesis = TradeThesis(
+                    symbol=symbol,
+                    trade_type=TradeType.SWING_SHORT,
+                    direction="long",
+                    entry_rationale=event.summary or event.headline,
+                    catalyst=event.headline,
+                    entry_price_target=current_price or Decimal("0"),
+                    profit_target=Decimal("0"),
+                    stop_loss=Decimal("0"),
+                    expected_exit_date=date.today() + timedelta(days=14),
+                    max_hold_date=date.today() + timedelta(days=30),
+                    confidence=0.5,
+                    status=ThesisStatus.DRAFT,
+                    source="user_telegram",
+                )
+                if self.thesis_repo:
+                    try:
+                        self.thesis_repo.create(thesis)
+                    except Exception:
+                        pass
+
+            # Mark event as processed
+            if self.events_repo:
                 try:
-                    existing = self.thesis_repo.get_active_by_symbol(symbol)
-                    if existing:
-                        created_theses.append(existing)
+                    self.events_repo.mark_processed(event.id, thesis.id if thesis else None)
                 except Exception:
                     pass
 
-        if not created_theses:
-            return [{"symbol": e.symbol, "status": "no_thesis", "message": "No thesis generated"} for e in events if e.symbol]
-
-        # Run DD immediately (bypass normal dedup/cooldown)
-        if self.dd_agent:
-            for thesis in created_theses:
-                symbol = thesis.symbol
+            # Run DD
+            if self.dd_agent and thesis:
                 try:
-                    ctx = self._build_context([symbol])
                     dd_report = self.dd_agent.analyze_thesis(thesis, ctx)
 
                     if dd_report:
@@ -549,7 +583,6 @@ class V2AutonomousOrchestrator:
                         }
                         results.append(result)
 
-                        # Update thesis status based on DD
                         from beavr.models.dd_report import DDRecommendation
                         if dd_report.recommendation == DDRecommendation.APPROVE:
                             thesis.dd_approved = True
@@ -569,6 +602,8 @@ class V2AutonomousOrchestrator:
                 except Exception as e:
                     logger.warning(f"User research DD failed for {symbol}: {e}")
                     results.append({"symbol": symbol, "status": "error", "message": str(e)})
+            else:
+                results.append({"symbol": symbol, "status": "queued", "message": "Queued for next DD cycle"})
 
         return results
 
