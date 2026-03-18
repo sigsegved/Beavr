@@ -1428,7 +1428,6 @@ class V2AutonomousOrchestrator:
                             dd_report_id=dd_report.id,
                             confidence=dd_report.confidence,
                         )
-                        self._notify_dd_report(dd_report)
 
                     else:
                         reason = dd_report.rejection_rationale or "No reason provided"
@@ -1443,7 +1442,6 @@ class V2AutonomousOrchestrator:
                             dd_report_id=dd_report.id,
                             reasoning=reason,
                         )
-                        self._notify_dd_report(dd_report)
 
                     # Update thesis in DB
                     try:
