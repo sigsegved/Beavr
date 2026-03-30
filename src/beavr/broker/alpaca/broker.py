@@ -9,6 +9,7 @@ from typing import Optional
 
 from beavr.broker.models import (
     AccountInfo,
+    BracketOrderRequest,
     BrokerError,
     BrokerPosition,
     MarketClock,
@@ -159,6 +160,69 @@ class AlpacaBroker:
             raise BrokerError(
                 error_code="order_error",
                 message=f"Failed to submit order: {e}",
+                broker_name=self.broker_name,
+            ) from e
+
+    def submit_bracket_order(self, order: BracketOrderRequest) -> OrderResult:
+        """Submit bracket order via Alpaca.
+
+        Uses Alpaca's native bracket order support which creates an entry
+        order with attached stop-loss and take-profit legs.
+        """
+        from alpaca.trading.enums import OrderClass, OrderSide, TimeInForce
+        from alpaca.trading.requests import (
+            MarketOrderRequest,
+            StopLossRequest,
+            TakeProfitRequest,
+        )
+
+        try:
+            side = OrderSide.BUY if order.side == "buy" else OrderSide.SELL
+            tif = TimeInForce.GTC if order.tif == "gtc" else TimeInForce.DAY
+
+            # Build request kwargs
+            request_kwargs: dict = {
+                "symbol": order.symbol,
+                "side": side,
+                "time_in_force": tif,
+                "order_class": OrderClass.BRACKET,
+                "take_profit": TakeProfitRequest(
+                    limit_price=float(order.take_profit_price)
+                ),
+                "stop_loss": StopLossRequest(stop_price=float(order.stop_loss_price)),
+            }
+
+            if order.notional is not None:
+                request_kwargs["notional"] = float(order.notional)
+            else:
+                request_kwargs["qty"] = float(order.quantity)
+
+            request = MarketOrderRequest(**request_kwargs)
+            alpaca_order = self._client.submit_order(request)
+
+            return OrderResult(
+                order_id=str(alpaca_order.id),
+                symbol=order.symbol,
+                side=order.side,
+                order_type="market",
+                status=(
+                    str(alpaca_order.status.value)
+                    if alpaca_order.status
+                    else "pending"
+                ),
+                filled_qty=Decimal(str(alpaca_order.filled_qty or 0)),
+                filled_avg_price=(
+                    Decimal(str(alpaca_order.filled_avg_price))
+                    if alpaca_order.filled_avg_price
+                    else None
+                ),
+                submitted_at=alpaca_order.submitted_at,
+            )
+
+        except Exception as e:
+            raise BrokerError(
+                error_code="bracket_order_error",
+                message=f"Failed to submit bracket order: {e}",
                 broker_name=self.broker_name,
             ) from e
 

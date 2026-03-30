@@ -132,6 +132,47 @@ class OrderRequest(BaseModel):
         return self
 
 
+class BracketOrderRequest(BaseModel):
+    """Bracket order: entry + stop loss + take profit submitted together.
+
+    A bracket order places an entry order along with automatic stop-loss
+    and take-profit orders at the broker level. This ensures risk management
+    is enforced even if the trading system goes offline.
+
+    Exactly one of ``quantity`` or ``notional`` must be provided.
+
+    Attributes:
+        symbol: Ticker symbol to trade.
+        side: Buy or sell.
+        quantity: Number of shares (mutually exclusive with notional).
+        notional: Dollar amount (mutually exclusive with quantity).
+        tif: Time-in-force instruction.
+        take_profit_price: Limit price for take profit leg.
+        stop_loss_price: Stop price for stop loss leg.
+    """
+
+    model_config = {"frozen": True}
+
+    symbol: str = Field(description="Ticker symbol to trade")
+    side: Literal["buy", "sell"] = Field(description="Order side")
+    quantity: Optional[Decimal] = Field(default=None, description="Number of shares")
+    notional: Optional[Decimal] = Field(default=None, description="Dollar amount")
+    tif: Literal["day", "gtc"] = Field(default="gtc", description="Time-in-force")
+    take_profit_price: Decimal = Field(description="Take profit limit price")
+    stop_loss_price: Decimal = Field(description="Stop loss price")
+
+    @model_validator(mode="after")
+    def _validate_quantity_xor_notional(self) -> BracketOrderRequest:
+        """Ensure exactly one of quantity or notional is provided."""
+        has_qty = self.quantity is not None
+        has_notional = self.notional is not None
+        if has_qty == has_notional:
+            raise ValueError(
+                "Exactly one of 'quantity' or 'notional' must be provided"
+            )
+        return self
+
+
 class OrderResult(BaseModel):
     """Broker-reported outcome of a submitted order.
 

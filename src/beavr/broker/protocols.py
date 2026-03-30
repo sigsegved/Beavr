@@ -14,6 +14,7 @@ import pandas as pd
 
 from beavr.broker.models import (
     AccountInfo,
+    BracketOrderRequest,
     BrokerPosition,
     MarketClock,
     OrderRequest,
@@ -98,6 +99,25 @@ class BrokerProvider(Protocol):
 
         Returns:
             List of order results matching the criteria.
+        """
+        ...
+
+    def submit_bracket_order(self, order: BracketOrderRequest) -> OrderResult:
+        """Submit a bracket order (entry + stop loss + take profit).
+
+        A bracket order places three linked orders: the entry order,
+        a stop-loss order, and a take-profit order. The child orders
+        are OCO (one-cancels-other).
+
+        Args:
+            order: The bracket order specification.
+
+        Returns:
+            The resulting order acknowledgement for the parent entry order.
+
+        Note:
+            Not all brokers support bracket orders. Implementations that
+            don't support this feature should raise NotImplementedError.
         """
         ...
 

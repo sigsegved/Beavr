@@ -12,6 +12,7 @@ import pytest
 
 from beavr.broker.models import (
     AccountInfo,
+    BracketOrderRequest,
     BrokerError,
     BrokerPosition,
     MarketClock,
@@ -158,6 +159,73 @@ class MockBroker:
                         side="long",
                     )
                 self._cash += qty * price
+
+        return result
+
+    def submit_bracket_order(self, order: BracketOrderRequest) -> OrderResult:
+        """Submit a bracket order (entry + stop loss + take profit).
+
+        In MockBroker, we simply treat this as a market order; we don't
+        actually simulate the bracket legs.
+        """
+        if order.symbol not in self._valid_symbols:
+            raise BrokerError(
+                error_code="invalid_symbol",
+                message=f"Symbol '{order.symbol}' not found",
+                broker_name=self.broker_name,
+            )
+
+        price = self._prices[order.symbol]
+        qty: Decimal
+        if order.quantity is not None:
+            qty = order.quantity
+        elif order.notional is not None:
+            qty = order.notional / price
+        else:
+            qty = Decimal("0")
+
+        order_id = str(uuid.uuid4())
+        now = datetime.utcnow()
+
+        result = OrderResult(
+            order_id=order_id,
+            symbol=order.symbol,
+            side=order.side,
+            order_type="market",
+            status="filled",
+            filled_qty=qty,
+            filled_avg_price=price,
+            submitted_at=now,
+            filled_at=now,
+        )
+        self._orders[order_id] = result
+
+        # Update positions (buy side only for simplicity)
+        if order.side == "buy":
+            existing = self._positions.get(order.symbol)
+            if existing:
+                new_qty = existing.qty + qty
+                new_cost = (
+                    (existing.avg_cost * existing.qty) + (price * qty)
+                ) / new_qty
+                self._positions[order.symbol] = BrokerPosition(
+                    symbol=order.symbol,
+                    qty=new_qty,
+                    market_value=new_qty * price,
+                    avg_cost=new_cost,
+                    unrealized_pl=Decimal("0"),
+                    side="long",
+                )
+            else:
+                self._positions[order.symbol] = BrokerPosition(
+                    symbol=order.symbol,
+                    qty=qty,
+                    market_value=qty * price,
+                    avg_cost=price,
+                    unrealized_pl=Decimal("0"),
+                    side="long",
+                )
+            self._cash -= qty * price
 
         return result
 
