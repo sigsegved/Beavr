@@ -83,10 +83,16 @@ TRADING STYLE:
 - Trend continuation after healthy pullbacks (price pulling back to 20 SMA in uptrend)
 
 BUY SIGNALS TO LOOK FOR:
-- RSI < 35 with price near lower Bollinger Band (oversold bounce)
-- Price pulling back to 20-day SMA in an uptrend (trend continuation)
-- Price > SMA50 but temporarily < SMA20 (buy the dip)
-- Volume spike on recovery after selloff
+- MOMENTUM: Price > SMA50, RSI between 50-70, volume expanding (strong uptrend)
+- PULLBACK IN UPTREND: Price > SMA50, temporarily below SMA20, RSI 35-50 (buy the dip IF trend intact)
+- BREAKOUT: Price breaking above Bollinger upper band with volume > 1.5x average
+- OVERSOLD BOUNCE (ONLY if trend intact): RSI < 35 BUT price MUST be above 50-day SMA
+
+DO NOT BUY (FALLING KNIFE FILTER):
+- RSI < 40 AND price below 50-day SMA (broken trend + weak momentum = falling knife)
+- Stock with positive news but negative price reaction (market knows something)
+- Stock down >15% in last 20 days without clear catalyst resolution
+- Price below both SMA20 and SMA50 (confirmed downtrend)
 
 SELL SIGNALS TO LOOK FOR:
 - RSI > 70 with price near upper Bollinger Band (overbought)
@@ -111,7 +117,8 @@ OUTPUT RULES:
 - Maximum 3 signals per analysis
 - If no compelling opportunity, return empty signals list
 - Be conservative in volatile/bear regimes
-- Include specific reasoning for each trade"""
+- Include specific reasoning for each trade
+- NEVER recommend buying oversold stocks in a downtrend"""
 
     def analyze(self, ctx: AgentContext) -> AgentProposal:
         """Analyze for swing trading opportunities."""
