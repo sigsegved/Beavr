@@ -307,14 +307,14 @@ class AIInvestor:
             logger.warning(f"Could not get indicators for {symbol}: {e}")
             return None
 
-    def analyze_opportunities(self, amount: Decimal, max_picks: int = 3) -> list[dict]:
+    def analyze_opportunities(self, amount: Decimal, max_picks: int = 3) -> tuple[list[dict], str, str]:
         """Use AI to analyze and pick opportunities."""
         from pydantic import BaseModel, Field
 
         # Get quality opportunities
         opps = self.get_quality_opportunities()
         if not opps:
-            return []
+            return [], "", ""
 
         # Get technicals for each
         with_technicals = []
@@ -325,7 +325,7 @@ class AIInvestor:
                 with_technicals.append(opp)
 
         if not with_technicals:
-            return []
+            return [], "", ""
 
         # Build context for AI
         context = "QUALITY STOCK OPPORTUNITIES:\n\n"
@@ -374,11 +374,15 @@ RULES:
 
 Be decisive - we want to deploy this capital."""
 
-        result: Analysis = self.llm.reason(
-            system_prompt="You are a professional day trader. Pick quality setups with clear risk/reward.",
-            user_prompt=prompt,
-            output_schema=Analysis,
-        )
+        try:
+            result: Analysis = self.llm.reason(
+                system_prompt="You are a professional day trader. Pick quality setups with clear risk/reward.",
+                user_prompt=prompt,
+                output_schema=Analysis,
+            )
+        except Exception as e:
+            logger.error(f"LLM analysis failed: {e}")
+            return [], f"Analysis failed: {e}", "high"
 
         # Convert to standard format
         picks = []
