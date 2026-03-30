@@ -390,3 +390,59 @@ class BeavrAPIImpl:
         )
         result = self._broker.submit_order(order)
         return {"order_id": result.order_id, "status": result.status}
+
+    def get_market_brief(self) -> Any | None:
+        """Generate an on-demand market briefing."""
+        try:
+            from datetime import date, datetime
+            from decimal import Decimal
+
+            from beavr.agents.base import AgentContext
+            from beavr.agents.market_briefing import MarketBriefingAgent
+
+            # Build minimal context
+            ctx = AgentContext(
+                current_date=date.today(),
+                timestamp=datetime.now(),
+                portfolio_value=Decimal("0"),
+                cash=Decimal("0"),
+                current_drawdown=0.0,
+                peak_value=Decimal("0"),
+                regime="sideways",
+                risk_budget=1.0,
+                prices={},
+                bars={},
+                positions={},
+                indicators={},
+            )
+
+            # Try to get real portfolio data
+            if self._orchestrator and self._orchestrator._broker:
+                try:
+                    account = self._orchestrator._broker.get_account()
+                    ctx = AgentContext(
+                        current_date=date.today(),
+                        timestamp=datetime.now(),
+                        portfolio_value=account.equity,
+                        cash=account.cash,
+                        current_drawdown=0.0,
+                        peak_value=account.equity,
+                        regime=getattr(self._orchestrator.state, "current_regime", "sideways"),
+                        risk_budget=1.0,
+                        prices={},
+                        bars={},
+                        positions={},
+                        indicators={},
+                    )
+                except Exception:
+                    pass
+
+            # Get LLM client
+            if self._orchestrator and hasattr(self._orchestrator, "_llm") and self._orchestrator._llm:
+                agent = MarketBriefingAgent(llm=self._orchestrator._llm)
+                return agent.generate_brief(ctx)
+
+            return None
+        except Exception as e:
+            logger.exception(f"Failed to generate market brief: {e}")
+            return None

@@ -904,6 +904,90 @@ def analyze(
 
 
 @ai_app.command()
+def brief() -> None:
+    """Get a market briefing with outlook and portfolio context."""
+    from beavr.agents.base import AgentContext
+    from beavr.agents.market_briefing import MarketBriefingAgent
+
+    investor = get_investor()
+
+    with console.status("Generating market briefing..."):
+        try:
+            # Build context
+            ctx = AgentContext(
+                current_date=date.today(),
+                timestamp=datetime.now(),
+                portfolio_value=Decimal("0"),
+                cash=Decimal("0"),
+                current_drawdown=0.0,
+                peak_value=Decimal("0"),
+                regime="sideways",
+                risk_budget=1.0,
+                prices={},
+                bars={},
+                positions={},
+                indicators={},
+            )
+
+            # Try to get real account data
+            if investor.broker:
+                try:
+                    account = investor.broker.get_account()
+                    ctx = AgentContext(
+                        current_date=date.today(),
+                        timestamp=datetime.now(),
+                        portfolio_value=account.equity,
+                        cash=account.cash,
+                        current_drawdown=0.0,
+                        peak_value=account.equity,
+                        regime="sideways",
+                        risk_budget=1.0,
+                        prices={},
+                        bars={},
+                        positions={},
+                        indicators={},
+                    )
+                except Exception:
+                    pass
+
+            agent = MarketBriefingAgent(llm=investor.llm)
+            market_brief = agent.generate_brief(ctx)
+
+            # Display with Rich
+            console.print()
+            console.print(Panel(
+                f"[bold]Regime:[/bold] {market_brief.regime.upper()} ({market_brief.regime_confidence:.0%} confidence)\n"
+                f"[bold]Risk Posture:[/bold] {market_brief.risk_posture}",
+                title="📊 Market Brief",
+                border_style="blue",
+            ))
+
+            if market_brief.leading_sectors:
+                console.print(f"\n[green]📈 Leading Sectors:[/green] {', '.join(market_brief.leading_sectors)}")
+            if market_brief.lagging_sectors:
+                console.print(f"[red]📉 Lagging Sectors:[/red] {', '.join(market_brief.lagging_sectors)}")
+            if market_brief.rotation_theme:
+                console.print(f"\n[cyan]🔄 Rotation:[/cyan] {market_brief.rotation_theme}")
+
+            if market_brief.key_takeaways:
+                console.print("\n[bold]🎯 Key Takeaways:[/bold]")
+                for t in market_brief.key_takeaways:
+                    console.print(f"  • {t}")
+
+            if market_brief.portfolio_warnings:
+                console.print("\n[yellow]⚠️ Portfolio Warnings:[/yellow]")
+                for w in market_brief.portfolio_warnings:
+                    console.print(f"  • {w}")
+
+            if market_brief.raw_summary:
+                console.print(Panel(market_brief.raw_summary, title="Full Summary", border_style="dim"))
+
+        except Exception as e:
+            console.print(f"[red]Error generating brief: {e}[/red]")
+            raise typer.Exit(1) from e
+
+
+@ai_app.command()
 def history(
     limit: int = typer.Option(20, "--limit", "-n", help="Number of records to show"),
     portfolio: Optional[str] = typer.Option(None, "--portfolio", "-p", help="Filter by portfolio name"),

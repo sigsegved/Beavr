@@ -117,3 +117,7 @@ class BeavrAPI(Protocol):
             Order result dict with order_id and status.
         """
         ...
+
+    def get_market_brief(self) -> Optional[Any]:
+        """Generate an on-demand market briefing."""
+        ...
