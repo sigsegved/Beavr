@@ -30,6 +30,7 @@ from beavr.agents.base import AgentContext
 from beavr.broker.models import BracketOrderRequest, OrderRequest
 from beavr.broker.protocols import BrokerProvider, MarketDataProvider, NewsProvider, ScreenerProvider
 from beavr.core.screener import passes_quality_gate
+from beavr.core.sizing import calculate_position_size
 from beavr.models.dd_report import DDRecommendation
 from beavr.models.market_event import EventImportance, EventType, MarketEvent
 from beavr.models.thesis import ThesisStatus, TradeThesis, TradeType
@@ -209,6 +210,10 @@ class V2Config:
     max_position_pct: float = 0.25
     max_day_trade_pct: float = 0.10
     daily_trade_limit: int = 5
+    
+    # Position limits
+    max_open_positions: int = 8  # Maximum simultaneous positions
+    min_position_value: float = 500.0  # Minimum $ per position
     
     # Day trade targets (user specified)
     day_trade_target_pct: float = 5.0
@@ -1763,6 +1768,15 @@ class V2AutonomousOrchestrator:
             logger.warning("🚨 Circuit breaker active - no trading")
             return
         
+        # Check position cap
+        current_positions = self._broker.get_positions() if self._broker else []
+        if len(current_positions) >= self.config.max_open_positions:
+            logger.info(
+                f"Position cap reached ({len(current_positions)}/{self.config.max_open_positions}) "
+                f"— no new day trades"
+            )
+            return
+        
         # Get approved day trade theses
         approved = self._get_approved_theses()
         
@@ -1809,6 +1823,15 @@ class V2AutonomousOrchestrator:
         This allows the system to react to market events throughout the day.
         """
         if not self._check_circuit_breaker():
+            return
+        
+        # Check position cap
+        current_positions = self._broker.get_positions() if self._broker else []
+        if len(current_positions) >= self.config.max_open_positions:
+            logger.info(
+                f"Position cap reached ({len(current_positions)}/{self.config.max_open_positions}) "
+                f"— no new entries until a position is closed"
+            )
             return
         
         # Get approved swing trade theses (not day trades)
@@ -1870,13 +1893,29 @@ class V2AutonomousOrchestrator:
             if not self._check_risk_limits(portfolio_value):
                 return False
             
-            # Calculate position size
-            if is_day_trade:
-                max_position = portfolio_value * Decimal(str(self.config.max_day_trade_pct))
-            else:
-                max_position = portfolio_value * Decimal(str(self.config.max_position_pct))
+            # Calculate position size using volatility-adjusted sizing
+            stop_pct = float(thesis.stop_pct) if thesis.stop_pct > 0 else 5.0
             
-            # Use DD recommended size if available
+            if is_day_trade:
+                # Day trades use tighter limits
+                max_position = calculate_position_size(
+                    portfolio_value=portfolio_value,
+                    stop_distance_pct=stop_pct,
+                    max_risk_per_trade=0.01,  # 1% risk for day trades
+                    min_position_pct=0.03,
+                    max_position_pct=float(self.config.max_day_trade_pct),
+                )
+            else:
+                # Swing trades use standard sizing
+                max_position = calculate_position_size(
+                    portfolio_value=portfolio_value,
+                    stop_distance_pct=stop_pct,
+                    max_risk_per_trade=0.02,  # 2% risk for swings
+                    min_position_pct=0.05,
+                    max_position_pct=float(self.config.max_position_pct),
+                )
+            
+            # Use DD recommended size if available and smaller
             if thesis.dd_report_id and self.dd_repo:
                 dd_report = self.dd_repo.get(thesis.dd_report_id)
                 if dd_report and dd_report.recommended_position_size_pct:
@@ -1885,12 +1924,50 @@ class V2AutonomousOrchestrator:
             
             position_value = min(max_position, cash * Decimal("0.95"))  # Keep 5% buffer
             
-            if position_value < Decimal("50"):
-                logger.warning(f"Position value ${position_value} too small")
+            if position_value < Decimal(str(self.config.min_position_value)):
+                logger.warning(
+                    f"Position value ${position_value:.2f} below minimum "
+                    f"${self.config.min_position_value:.2f} — skipping"
+                )
                 return False
             
+            # Get live price and validate against thesis target
+            try:
+                live_bars = self._data_provider.get_bars(
+                    thesis.symbol,
+                    date.today() - timedelta(days=2),
+                    date.today(),
+                ) if self._data_provider else None
+
+                if live_bars is not None and not live_bars.empty:
+                    live_price = Decimal(str(live_bars["close"].iloc[-1]))
+                    entry_target = thesis.entry_price_target
+
+                    if entry_target > 0:
+                        deviation_pct = float((live_price - entry_target) / entry_target * 100)
+                        if deviation_pct > 3.0:
+                            logger.info(
+                                f"   ⏭️ Skipping {thesis.symbol}: live price ${live_price:.2f} "
+                                f"is {deviation_pct:.1f}% above entry target ${entry_target:.2f}"
+                            )
+                            self._log_decision(
+                                decision_type="entry_skipped",
+                                action="skip",
+                                symbol=thesis.symbol,
+                                thesis_id=thesis.id,
+                                reasoning=f"Live price {deviation_pct:.1f}% above target",
+                            )
+                            return False
+
+                    # Use live price for share calculation
+                    current_price = live_price
+                else:
+                    current_price = thesis.entry_price_target
+            except Exception as e:
+                logger.warning(f"Could not fetch live price for {thesis.symbol}: {e}")
+                current_price = thesis.entry_price_target
+
             # Calculate shares
-            current_price = thesis.entry_price_target  # TODO: Get live price
             shares = (position_value / current_price).quantize(Decimal("0.001"))
             
             logger.info(f"   Entry: ${current_price:.2f}")
