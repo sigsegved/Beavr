@@ -62,9 +62,13 @@ class TestPositionCap:
     ) -> None:
         """New entries allowed when below cap."""
         from datetime import date, timedelta
-        from beavr.models.thesis import TradeThesis, TradeType, ThesisStatus
 
-        # Setup: 5 positions (below max of 8)
+        from beavr.models.thesis import ThesisStatus, TradeThesis, TradeType
+
+        # Set bull regime (max 8 positions)
+        orchestrator._last_regime = "bull"
+
+        # Setup: 5 positions (below max of 8 for bull regime)
         positions = [self._create_position(f"SYM{i}") for i in range(5)]
         mock_broker.get_positions.return_value = positions
 
@@ -102,7 +106,8 @@ class TestPositionCap:
     ) -> None:
         """Positions below min_position_value are rejected."""
         from datetime import date, timedelta
-        from beavr.models.thesis import TradeThesis, TradeType, ThesisStatus
+
+        from beavr.models.thesis import ThesisStatus, TradeThesis, TradeType
 
         # Setup broker with very little cash
         mock_broker.get_account.return_value = MagicMock(
