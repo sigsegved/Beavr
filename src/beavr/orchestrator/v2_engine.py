@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
@@ -191,6 +191,12 @@ class SystemState(BaseModel):
     trading_enabled: bool = True
     circuit_breaker_until: Optional[datetime] = None
 
+    # Trailing stop tracking
+    trailing_stops: dict[str, float] = Field(
+        default_factory=dict,
+        description="Symbol -> highest price seen (for trailing stop calculation)"
+    )
+
     # Research tracking
     last_research_run: Optional[datetime] = None
 
@@ -214,6 +220,20 @@ class V2Config:
     # Position limits
     max_open_positions: int = 8  # Maximum simultaneous positions
     min_position_value: float = 500.0  # Minimum $ per position
+    
+    # Regime-based position limits
+    regime_max_positions: dict[str, int] = field(default_factory=lambda: {
+        "bull": 8,
+        "sideways": 5,
+        "bear": 2,
+        "volatile": 3,
+    })
+    regime_size_multiplier: dict[str, float] = field(default_factory=lambda: {
+        "bull": 1.0,
+        "sideways": 0.7,
+        "bear": 0.4,
+        "volatile": 0.3,
+    })
     
     # Day trade targets (user specified)
     day_trade_target_pct: float = 5.0
@@ -905,6 +925,26 @@ class V2AutonomousOrchestrator:
             if symbols_are_related(symbol, s):
                 return s
         return None
+    
+    def _get_regime_adjusted_limits(self) -> tuple[int, float]:
+        """Get position limit and size multiplier for current market regime.
+
+        Returns:
+            Tuple of (max_positions, size_multiplier) adjusted for regime.
+        """
+        # Get latest regime from state or default to sideways
+        regime = getattr(self.state, 'current_regime', None) or "sideways"
+        
+        # Also check if we have a _last_regime attribute
+        if hasattr(self, '_last_regime') and self._last_regime:
+            regime = self._last_regime
+
+        max_pos = self.config.regime_max_positions.get(
+            regime, self.config.max_open_positions
+        )
+        multiplier = self.config.regime_size_multiplier.get(regime, 1.0)
+        
+        return max_pos, multiplier
     
     def _check_risk_limits(self, portfolio_value: Decimal) -> bool:
         """
@@ -1606,12 +1646,16 @@ class V2AutonomousOrchestrator:
         Run the overnight DD research cycle.
 
         This is the deep research phase where we:
+        0. Nightly position review (check stale/invalidated positions)
         1. Scan earnings calendar (if configured)
         2. Get pending theses that need DD
         3. Run DD agent on each
         4. Save DD reports
         5. Mark theses as approved/rejected
         """
+        # Step 0: Nightly position review
+        self._nightly_position_review()
+
         # Step 1: Earnings calendar scan
         self._scan_earnings_calendar()
 
@@ -1768,12 +1812,14 @@ class V2AutonomousOrchestrator:
             logger.warning("🚨 Circuit breaker active - no trading")
             return
         
-        # Check position cap
+        # Check position cap (regime-adjusted)
+        max_positions, _ = self._get_regime_adjusted_limits()
         current_positions = self._broker.get_positions() if self._broker else []
-        if len(current_positions) >= self.config.max_open_positions:
+        if len(current_positions) >= max_positions:
+            regime = getattr(self.state, 'current_regime', 'sideways')
             logger.info(
-                f"Position cap reached ({len(current_positions)}/{self.config.max_open_positions}) "
-                f"— no new day trades"
+                f"Regime '{regime}' position cap reached "
+                f"({len(current_positions)}/{max_positions}) — no new day trades"
             )
             return
         
@@ -1825,12 +1871,14 @@ class V2AutonomousOrchestrator:
         if not self._check_circuit_breaker():
             return
         
-        # Check position cap
+        # Check position cap (regime-adjusted)
+        max_positions, size_multiplier = self._get_regime_adjusted_limits()
         current_positions = self._broker.get_positions() if self._broker else []
-        if len(current_positions) >= self.config.max_open_positions:
+        if len(current_positions) >= max_positions:
+            regime = getattr(self.state, 'current_regime', 'sideways')
             logger.info(
-                f"Position cap reached ({len(current_positions)}/{self.config.max_open_positions}) "
-                f"— no new entries until a position is closed"
+                f"Regime '{regime}' position cap reached "
+                f"({len(current_positions)}/{max_positions}) — no new entries"
             )
             return
         
@@ -1921,6 +1969,10 @@ class V2AutonomousOrchestrator:
                 if dd_report and dd_report.recommended_position_size_pct:
                     dd_size = portfolio_value * Decimal(str(dd_report.recommended_position_size_pct))
                     max_position = min(max_position, dd_size)
+            
+            # Apply regime size multiplier
+            _, size_multiplier = self._get_regime_adjusted_limits()
+            max_position = max_position * Decimal(str(size_multiplier))
             
             position_value = min(max_position, cash * Decimal("0.95"))  # Keep 5% buffer
             
@@ -2064,7 +2116,88 @@ class V2AutonomousOrchestrator:
         except Exception as e:
             logger.error(f"Trade execution error: {e}")
             return False
-    
+
+    def _nightly_position_review(self) -> None:
+        """Review all held positions against their theses.
+
+        Runs during OVERNIGHT_DD phase. Deterministic checks first,
+        then flags positions for exit based on thesis dates.
+
+        Flags for exit:
+        - Positions past max_hold_date (immediate)
+        - Positions past expected_exit_date + 5 days
+        - Positions where catalyst date passed with negative P/L
+        """
+        if not self._broker or not self.thesis_repo:
+            return
+
+        logger.info("=" * 60)
+        logger.info("🌙 NIGHTLY POSITION REVIEW")
+        logger.info("=" * 60)
+
+        positions = self._broker.get_positions()
+        if not positions:
+            logger.info("No positions to review")
+            return
+
+        today = date.today()
+        exit_queue: list[tuple[str, str]] = []  # (symbol, reason)
+
+        for pos in positions:
+            symbol = pos.symbol
+
+            # Find active thesis
+            try:
+                theses = self.thesis_repo.get_by_symbol(symbol)
+                thesis = next(
+                    (t for t in theses if t.status in {ThesisStatus.EXECUTED, ThesisStatus.ACTIVE}),
+                    None,
+                )
+            except Exception:
+                thesis = None
+
+            if not thesis:
+                logger.warning(f"  ⚠️ {symbol}: No active thesis found (orphaned position)")
+                continue
+
+            # Check 1: Past max_hold_date
+            if thesis.max_hold_date and today > thesis.max_hold_date:
+                days_over = (today - thesis.max_hold_date).days
+                exit_queue.append((symbol, f"past max_hold_date by {days_over} days"))
+                continue
+
+            # Check 2: Past expected_exit_date by more than 5 days
+            if thesis.expected_exit_date and today > thesis.expected_exit_date + timedelta(days=5):
+                days_over = (today - thesis.expected_exit_date).days
+                exit_queue.append((symbol, f"past expected_exit_date by {days_over} days"))
+                continue
+
+            # Check 3: Catalyst date passed (if specified and in the past)
+            if thesis.catalyst_date and today > thesis.catalyst_date + timedelta(days=3):
+                cost_basis = pos.avg_cost * pos.qty
+                pnl_pct = float(pos.unrealized_pl / cost_basis * 100) if cost_basis > 0 else 0.0
+                if pnl_pct < -2.0:
+                    exit_queue.append((symbol, f"catalyst passed {thesis.catalyst_date}, position at {pnl_pct:.1f}%"))
+                    continue
+
+            logger.info(f"  ✅ {symbol}: Thesis intact")
+
+        # Log results
+        if exit_queue:
+            logger.info(f"\n🚨 {len(exit_queue)} positions flagged for exit:")
+            for sym, reason in exit_queue:
+                logger.info(f"  ❌ {sym}: {reason}")
+                self._log_decision(
+                    decision_type="nightly_review_exit",
+                    action="queue_exit",
+                    symbol=sym,
+                    reasoning=reason,
+                )
+        else:
+            logger.info("\n✅ All positions pass nightly review")
+
+        self._save_state()
+
     def _monitor_positions(self) -> None:
         """
         Monitor all open positions during market hours.
@@ -2161,7 +2294,27 @@ class V2AutonomousOrchestrator:
                                 )
                     except Exception as e:
                         logger.debug(f"Thesis lookup failed for {symbol}: {e}")
-                
+
+                # Trailing stop: ratchet up as price advances
+                if pnl_pct > 3.0:  # Only activate after +3%
+                    current_price_float = float(pos.market_value / pos.qty) if pos.qty > 0 else 0.0
+                    highest = self.state.trailing_stops.get(symbol)
+
+                    if highest is None or current_price_float > highest:
+                        self.state.trailing_stops[symbol] = current_price_float
+                        highest = current_price_float
+
+                    # Trail at 4% below highest price seen
+                    trail_stop_price = highest * 0.96
+                    if current_price_float < trail_stop_price and pnl_pct > 0:
+                        logger.info(
+                            f"📉 TRAILING STOP: {symbol} dropped below trail "
+                            f"(${current_price_float:.2f} < ${trail_stop_price:.2f})"
+                        )
+                        self._close_position(symbol, "trailing_stop", pnl_pct)
+                        self.state.trailing_stops.pop(symbol, None)
+                        continue
+
                 logger.debug(f"   {symbol}: {pnl_pct:+.1f}% (T:+{target_pct}% S:-{stop_pct}%)")
                 
         except Exception as e:
@@ -2235,6 +2388,9 @@ class V2AutonomousOrchestrator:
                 self.state.active_day_trades.remove(symbol)
             if symbol in self.state.active_swing_trades:
                 self.state.active_swing_trades.remove(symbol)
+
+            # Clean up trailing stop tracking
+            self.state.trailing_stops.pop(symbol, None)
             
             # Track PnL
             if pnl_pct > 0:
