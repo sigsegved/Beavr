@@ -27,8 +27,9 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, Field
 
 from beavr.agents.base import AgentContext
-from beavr.broker.models import OrderRequest
+from beavr.broker.models import BracketOrderRequest, OrderRequest
 from beavr.broker.protocols import BrokerProvider, MarketDataProvider, NewsProvider, ScreenerProvider
+from beavr.core.screener import passes_quality_gate
 from beavr.models.dd_report import DDRecommendation
 from beavr.models.market_event import EventImportance, EventType, MarketEvent
 from beavr.models.thesis import ThesisStatus, TradeThesis, TradeType
@@ -1030,6 +1031,13 @@ class V2AutonomousOrchestrator:
             change_pct = float(mover.get("change_pct", mover.get("percent_change", 0)))
             if not symbol:
                 continue
+
+            # Quality gate filter
+            price = float(mover.get("price", 0))
+            if not passes_quality_gate(symbol, price=price):
+                logger.debug(f"Screener rejected mover: {symbol} (price=${price:.2f})")
+                continue
+
             if change_pct >= 0:
                 events.append(
                     MarketEvent(
@@ -1060,8 +1068,14 @@ class V2AutonomousOrchestrator:
             actives = screener.get_most_actives(top=self.config.market_movers_limit)
             for active in actives:
                 active_symbol = active.get("symbol", "")
-                if active_symbol:
-                    events.append(
+                if not active_symbol:
+                    continue
+                # Quality gate filter
+                active_price = float(active.get("price", 0))
+                if not passes_quality_gate(active_symbol, price=active_price):
+                    logger.debug(f"Screener rejected active: {active_symbol}")
+                    continue
+                events.append(
                         MarketEvent(
                             event_type=EventType.OTHER,
                             symbol=active_symbol,
@@ -1094,7 +1108,7 @@ class V2AutonomousOrchestrator:
         for thesis in self._get_pending_dd_candidates():
             symbols.add(thesis.symbol)
 
-        limited = list(symbols)[: self.config.max_research_symbols]
+        limited = [s for s in symbols if passes_quality_gate(s)][:self.config.max_research_symbols]
         return limited
 
     def _fetch_news_items(self, symbols: list[str]) -> list[dict[str, Any]]:
@@ -1886,17 +1900,37 @@ class V2AutonomousOrchestrator:
             logger.info(f"   Stop: ${thesis.stop_loss:.2f} (-{thesis.stop_pct:.1f}%)")
             
             # Execute order via broker abstraction
-            order_request = OrderRequest(
-                symbol=thesis.symbol,
-                notional=Decimal(str(round(float(position_value), 2))),
-                side="buy",
-                order_type="market",
-                tif="day",
-            )
-            
-            order = self._broker.submit_order(order_request)
-            
-            logger.info(f"   ✅ Order submitted: {order.order_id}")
+            # Try bracket order first (includes stop + target at broker level)
+            try:
+                bracket_request = BracketOrderRequest(
+                    symbol=thesis.symbol,
+                    side="buy",
+                    notional=Decimal(str(round(float(position_value), 2))),
+                    tif="gtc",
+                    take_profit_price=thesis.profit_target,
+                    stop_loss_price=thesis.stop_loss,
+                )
+                order = self._broker.submit_bracket_order(bracket_request)
+                logger.info(f"   ✅ Bracket order submitted: {order.order_id}")
+                logger.info(
+                    f"   🎯 Target: ${thesis.profit_target:.2f} | "
+                    f"🛑 Stop: ${thesis.stop_loss:.2f}"
+                )
+            except (AttributeError, NotImplementedError) as e:
+                # Broker doesn't support bracket orders — fall back to simple market order
+                logger.warning(
+                    f"Broker does not support bracket orders ({e}), "
+                    "using simple market order"
+                )
+                order_request = OrderRequest(
+                    symbol=thesis.symbol,
+                    notional=Decimal(str(round(float(position_value), 2))),
+                    side="buy",
+                    order_type="market",
+                    tif="day",
+                )
+                order = self._broker.submit_order(order_request)
+                logger.info(f"   ✅ Order submitted: {order.order_id}")
             
             # Track position in DB
             if self.positions_repo:
@@ -2021,6 +2055,35 @@ class V2AutonomousOrchestrator:
                     logger.info(f"🛑 STOP LOSS: {symbol} at {pnl_pct:.1f}%")
                     self._close_position(symbol, "stop_loss", pnl_pct)
                     continue
+
+                # Check time-based exits (thesis max_hold_date)
+                if db_pos and self.thesis_repo:
+                    try:
+                        # Find the thesis for this position
+                        theses = self.thesis_repo.get_by_symbol(symbol)
+                        active_thesis = next(
+                            (t for t in theses if t.status in {ThesisStatus.EXECUTED, ThesisStatus.ACTIVE}),
+                            None,
+                        )
+                        if active_thesis:
+                            today = date.today()
+                            # Hard exit: past max_hold_date
+                            if active_thesis.max_hold_date and today > active_thesis.max_hold_date:
+                                logger.info(
+                                    f"⏰ TIME EXIT: {symbol} past max_hold_date "
+                                    f"({active_thesis.max_hold_date})"
+                                )
+                                self._close_position(symbol, "time_exit", pnl_pct)
+                                continue
+
+                            # Soft flag: past expected_exit_date (log warning)
+                            if active_thesis.expected_exit_date and today > active_thesis.expected_exit_date:
+                                logger.warning(
+                                    f"⚠️ {symbol} past expected_exit_date "
+                                    f"({active_thesis.expected_exit_date}) — review needed"
+                                )
+                    except Exception as e:
+                        logger.debug(f"Thesis lookup failed for {symbol}: {e}")
                 
                 logger.debug(f"   {symbol}: {pnl_pct:+.1f}% (T:+{target_pct}% S:-{stop_pct}%)")
                 
