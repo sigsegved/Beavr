@@ -132,6 +132,16 @@ class AlpacaDataFetcher:
             symbol: self.get_bars(symbol, start, end, timeframe) for symbol in symbols
         }
 
+    def get_bars_multi(
+        self,
+        symbols: list[str],
+        start: date,
+        end: date,
+        timeframe: str = "1Day",
+    ) -> Dict[str, pd.DataFrame]:
+        """Alias for get_multi_bars to match MarketDataProvider protocol."""
+        return self.get_multi_bars(symbols, start, end, timeframe)
+
     def _fetch_from_alpaca(
         self,
         symbol: str,
@@ -192,8 +202,11 @@ class AlpacaDataFetcher:
         """Convert timeframe string to Alpaca TimeFrame."""
         mapping: Dict[str, TimeFrame] = {
             "1Day": TimeFrame.Day,
+            "1day": TimeFrame.Day,
             "1Hour": TimeFrame.Hour,
+            "1hour": TimeFrame.Hour,
             "1Min": TimeFrame.Minute,
+            "1min": TimeFrame.Minute,
         }
         if timeframe not in mapping:
             raise ValueError(f"Unsupported timeframe: {timeframe}")

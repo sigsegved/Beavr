@@ -308,4 +308,12 @@ class AlpacaMarketData:
                 "volume": Decimal(str(minute_bar.volume)),
             }
 
+        # Add convenience latest_price field
+        if "latest_trade" in result:
+            result["latest_price"] = result["latest_trade"]["price"]
+        elif "daily_bar" in result:
+            result["latest_price"] = result["daily_bar"]["close"]
+        elif "minute_bar" in result:
+            result["latest_price"] = result["minute_bar"]["close"]
+
         return result

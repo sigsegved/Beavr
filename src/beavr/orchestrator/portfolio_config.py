@@ -10,6 +10,9 @@ import dataclasses
 import logging
 from typing import Any
 
+from beavr.models.portfolio_record import Aggressiveness
+from beavr.orchestrator.v2_engine import V2Config
+
 logger = logging.getLogger(__name__)
 
 # Patterns that indicate an attempt to hijack the LLM via external content.
@@ -36,9 +39,6 @@ _INJECTION_PATTERNS: list[str] = [
     "system prompt:",
     "jailbreak",
 ]
-
-from beavr.models.portfolio_record import Aggressiveness
-from beavr.orchestrator.v2_engine import V2Config
 
 # ---------------------------------------------------------------------------
 # Aggressiveness → V2Config field overrides
