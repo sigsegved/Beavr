@@ -180,4 +180,4 @@ class TestSchemaVersion:
 
     def test_schema_version_exists(self) -> None:
         """Test that schema version is defined."""
-        assert SCHEMA_VERSION == 1
+        assert SCHEMA_VERSION == 2

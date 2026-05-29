@@ -1,0 +1,17 @@
+# Reddit Sentiment DCA Strategy Configuration
+# Monthly DCA with adjustments based on Reddit meme stock sentiment.
+# Boosts buying when a symbol has bullish Reddit sentiment,
+# reduces allocation when bearish.
+
+template = "reddit_sentiment_dca"
+
+[params]
+symbols = ["SPY", "QQQ"]
+monthly_budget = 1000      # $1000/month total budget
+base_buy_pct = 0.50        # Deploy 50% as base DCA on 1st of month
+bullish_boost = 0.25       # Increase allocation 25% on bullish sentiment
+bearish_reduction = 0.50   # Decrease allocation 50% on bearish sentiment
+sentiment_threshold = 0.3  # Min |sentiment| to trigger adjustment
+min_mentions = 5           # Need at least 5 Reddit mentions
+fallback_days = 3          # Deploy remaining budget 3 days before month-end
+min_buy_amount = 25        # Don't place orders smaller than $25

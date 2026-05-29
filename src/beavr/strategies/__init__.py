@@ -4,13 +4,14 @@ This module provides:
 - BaseStrategy: Abstract base class for all strategies
 - StrategyContext: Context provided to strategies during evaluation
 - Strategy registry for discovering and loading strategies
-- Built-in strategies: SimpleDCA, DipBuyDCA, BuyAndHold
+- Built-in strategies: SimpleDCA, DipBuyDCA, BuyAndHold, RedditSentimentDCA
 """
 
 from beavr.strategies.base import BaseStrategy
 from beavr.strategies.buy_and_hold import BuyAndHoldStrategy
 from beavr.strategies.context import StrategyContext
 from beavr.strategies.dip_buy_dca import DipBuyDCAStrategy
+from beavr.strategies.reddit_sentiment_dca import RedditSentimentDCAStrategy
 from beavr.strategies.registry import (
     clear_registry,
     create_strategy,
@@ -27,6 +28,7 @@ __all__ = [
     "SimpleDCAStrategy",
     "BuyAndHoldStrategy",
     "DipBuyDCAStrategy",
+    "RedditSentimentDCAStrategy",
     "register_strategy",
     "get_strategy",
     "list_strategies",

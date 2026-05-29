@@ -5,6 +5,7 @@ from rich.console import Console
 
 from beavr import __version__
 from beavr.cli.backtest import backtest_app
+from beavr.cli.reddit import reddit_app
 
 app = typer.Typer(
     name="bvr",
@@ -12,6 +13,7 @@ app = typer.Typer(
     add_completion=False,
 )
 app.add_typer(backtest_app, name="backtest")
+app.add_typer(reddit_app, name="reddit")
 console = Console()
 
 
