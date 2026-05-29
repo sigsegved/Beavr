@@ -142,3 +142,8 @@ def _ensure_strategies_loaded() -> None:
         from beavr.strategies import dip_buy_dca  # noqa: F401
     except ImportError:
         pass
+
+    try:
+        from beavr.strategies import reddit_sentiment_dca  # noqa: F401
+    except ImportError:
+        pass

@@ -439,6 +439,98 @@ class VolatilitySwingParams(BaseModel):
     model_config = ConfigDict(frozen=True)
 
 
+class RedditConfig(BaseModel):
+    """Configuration for Reddit meme stock scanning.
+
+    Attributes:
+        subreddits: Subreddits to scan for meme stock mentions
+        post_limit: Maximum posts to fetch per subreddit
+        min_mentions: Minimum mentions for a ticker to qualify as trending
+        user_agent: User-Agent string for Reddit API requests
+    """
+
+    subreddits: list[str] = Field(
+        default=["wallstreetbets", "stocks", "pennystocks"],
+        description="Subreddits to scan",
+    )
+    post_limit: int = Field(
+        default=100,
+        description="Max posts per subreddit",
+        ge=10,
+        le=100,
+    )
+    min_mentions: int = Field(
+        default=2,
+        description="Minimum mentions to qualify as trending",
+        ge=1,
+        le=50,
+    )
+    user_agent: str = Field(
+        default="beavr/0.1.0 (https://github.com/sigsegved/Beavr)",
+        description="User-Agent for Reddit requests",
+    )
+
+    model_config = ConfigDict(frozen=True)
+
+
+class RedditSentimentDCAParams(BaseModel):
+    """Parameters for Reddit Sentiment DCA strategy.
+
+    Regular DCA with allocation adjustments based on Reddit meme stock
+    sentiment. Boost buying when sentiment is bullish, reduce when bearish.
+    """
+
+    symbols: list[str] = Field(default=["SPY"], description="Symbols to buy")
+    monthly_budget: Decimal = Field(
+        default=Decimal("1000"),
+        description="Total budget per month",
+        ge=Decimal("1"),
+    )
+    base_buy_pct: float = Field(
+        default=0.50,
+        description="Fraction of monthly budget for base DCA buy",
+        ge=0.0,
+        le=1.0,
+    )
+    bullish_boost: float = Field(
+        default=0.25,
+        description="Extra fraction to allocate when strong bullish sentiment",
+        ge=0.0,
+        le=1.0,
+    )
+    bearish_reduction: float = Field(
+        default=0.50,
+        description="Fraction to reduce allocation when strong bearish sentiment",
+        ge=0.0,
+        le=1.0,
+    )
+    sentiment_threshold: float = Field(
+        default=0.3,
+        description="Minimum |sentiment| to trigger adjustment",
+        ge=0.0,
+        le=1.0,
+    )
+    min_mentions: int = Field(
+        default=5,
+        description="Minimum Reddit mentions before considering sentiment",
+        ge=1,
+        le=100,
+    )
+    fallback_days: int = Field(
+        default=3,
+        description="Days before month-end to trigger fallback buy",
+        ge=1,
+        le=5,
+    )
+    min_buy_amount: Decimal = Field(
+        default=Decimal("25"),
+        description="Minimum order size in dollars",
+        ge=Decimal("1"),
+    )
+
+    model_config = ConfigDict(frozen=True)
+
+
 class BacktestConfig(BaseModel):
     """Configuration for a backtest run.
 
